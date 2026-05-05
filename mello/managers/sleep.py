@@ -30,6 +30,8 @@ class SleepManager:
     
     def __init__(self):
         self.is_sleeping = False
+        self.sleep_enabled = True
+        self.sleep_disabled_reason: Optional[str] = None
         self.last_activity = time.time()
         self.backlight_path = self._detect_backlight()
         self.drm_dpms_path = self._detect_drm_connector()
@@ -99,9 +101,34 @@ class SleepManager:
         self.last_activity = time.time()
         if self.is_sleeping:
             self.wake_up()
+
+    def disable_sleep(self, reason: str):
+        """Disable automatic sleep for this app session and ensure display is on."""
+        if self.sleep_enabled:
+            logger.warning(f'Sleep disabled: {reason}')
+        else:
+            logger.debug(f'Sleep already disabled: {self.sleep_disabled_reason}')
+        self.sleep_enabled = False
+        self.sleep_disabled_reason = reason
+        self.reset_timer()
+        if not self.is_sleeping:
+            self._set_display(True)
+
+    def enable_sleep(self):
+        """Re-enable automatic sleep for this app session."""
+        if not self.sleep_enabled:
+            logger.info('Sleep enabled')
+        self.sleep_enabled = True
+        self.sleep_disabled_reason = None
+        self.reset_timer()
     
     def check_sleep(self, is_playing: bool) -> bool:
         """Check if should enter sleep mode. Returns True if sleeping."""
+        if not self.sleep_enabled:
+            if self.is_sleeping:
+                self.wake_up()
+            return False
+
         if self.is_sleeping:
             return True
         

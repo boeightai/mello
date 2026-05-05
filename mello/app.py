@@ -75,7 +75,24 @@ class Mello:
                 with open('/boot/config.txt', 'r') as f:
                     config = f.read()
                     # Check for KMS-related overlays
-                    if 'dtoverlay=vc4-kms-v3d' in config or 'dtoverlay=vc4-kms-dsi-7inch' in config:
+                    if (
+                        'dtoverlay=vc4-kms-v3d' in config
+                        or 'dtoverlay=vc4-kms-dsi-7inch' in config
+                        or 'dtoverlay=vc4-kms-dsi-ili9881-5inch' in config
+                    ):
+                        return True
+        except (OSError, IOError):
+            pass
+
+        try:
+            if os.path.exists('/boot/firmware/config.txt'):
+                with open('/boot/firmware/config.txt', 'r') as f:
+                    config = f.read()
+                    if (
+                        'dtoverlay=vc4-kms-v3d' in config
+                        or 'dtoverlay=vc4-kms-dsi-7inch' in config
+                        or 'dtoverlay=vc4-kms-dsi-ili9881-5inch' in config
+                    ):
                         return True
         except (OSError, IOError):
             pass
@@ -206,10 +223,15 @@ class Mello:
         
         # Evdev touch handler for KMSDRM mode (reads /dev/input directly)
         self.evdev_touch = EvdevTouchHandler(SCREEN_WIDTH, SCREEN_HEIGHT)
-        self.evdev_touch.start()  # Starts background thread if touchscreen found
+        touch_available = self.evdev_touch.start()  # Starts background thread if touchscreen found
         
         # Managers
         self.sleep_manager = SleepManager()
+        if not touch_available and not self.mock_mode:
+            self._disable_sleep_for_touch(
+                self.evdev_touch.consume_failure_reason() or 'touchscreen unavailable at startup'
+            )
+        self._log_startup_health()
         self.carousel = SmoothCarousel()
         self.play_timer = PlayTimer()
         self.perf_monitor = PerformanceMonitor()
@@ -654,6 +676,77 @@ class Mello:
                         logger.debug('KMS/DRM detected but not using kmsdrm driver')
             except Exception:
                 pass
+
+    def _read_text_file(self, path: str) -> Optional[str]:
+        """Read a text file for diagnostics."""
+        try:
+            with open(path, 'r') as f:
+                return f.read().strip()
+        except Exception:
+            return None
+
+    def _boot_config_status(self) -> str:
+        """Return compact boot config diagnostics for field support."""
+        config_path = None
+        for path in ('/boot/firmware/config.txt', '/boot/config.txt'):
+            if os.path.exists(path):
+                config_path = path
+                break
+        if not config_path:
+            return 'missing'
+        content = self._read_text_file(config_path) or ''
+        explicit_overlay = 'dtoverlay=vc4-kms-dsi-ili9881-5inch,rotation=90' in content
+        display_auto_detect_active = any(
+            line.strip() == 'display_auto_detect=1'
+            for line in content.splitlines()
+        )
+        disable_splash = any(
+            line.strip() == 'disable_splash=1'
+            for line in content.splitlines()
+        )
+        return (
+            f'path={config_path}, ili9881_5inch_overlay={explicit_overlay}, '
+            f'display_auto_detect_active={display_auto_detect_active}, '
+            f'disable_splash={disable_splash}'
+        )
+
+    def _log_startup_health(self):
+        """Log display/touch health so black-screen diagnosis is evidence-based."""
+        backlight_value = (
+            self._read_text_file(self.sleep_manager.backlight_path)
+            if self.sleep_manager.backlight_path else None
+        )
+        dsi_status = self._read_text_file('/sys/class/drm/card0-DSI-1/status')
+        dsi_dpms = self._read_text_file('/sys/class/drm/card0-DSI-1/dpms')
+        logger.info(f'HEALTH boot_config: {self._boot_config_status()}')
+        logger.info(
+            'HEALTH display: '
+            f'backlight_path={self.sleep_manager.backlight_path or "none"}, '
+            f'backlight_value={backlight_value or "unknown"}, '
+            f'dsi_status={dsi_status or "unknown"}, dsi_dpms={dsi_dpms or "unknown"}'
+        )
+        logger.info(
+            'HEALTH touch: '
+            f'available={self.evdev_touch.is_available}, '
+            f'device={self.evdev_touch.device_name or "none"}, '
+            f'path={self.evdev_touch.device_path or "none"}, '
+            f'sleep_enabled={self.sleep_manager.sleep_enabled}'
+        )
+
+    def _disable_sleep_for_touch(self, reason: str):
+        """Disable sleep when touch wake is unavailable, waking display if needed."""
+        was_sleeping = self.sleep_manager.is_sleeping
+        self.sleep_manager.disable_sleep(f'touch wake unavailable: {reason}')
+        if was_sleeping:
+            self.bluetooth.resume_monitoring()
+            self.tracker.on_wake()
+        self.renderer.invalidate()
+
+    def _check_touch_health(self):
+        """React if the background touch reader fails after startup."""
+        reason = self.evdev_touch.consume_failure_reason()
+        if reason:
+            self._disable_sleep_for_touch(reason)
     
     def _on_ws_update(self):
         """Called when WebSocket receives an event."""
@@ -762,6 +855,7 @@ class Mello:
         
         # Main loop
         while self.running:
+            self._check_touch_health()
             # Sleep mode: wait for touch/key to wake up
             if self.sleep_manager.is_sleeping:
                 # Primary wake: evdev threading.Event (reliable across threads)
@@ -1766,6 +1860,7 @@ class Mello:
     
     def _update(self, dt: float):
         """Update application state."""
+        self._check_touch_health()
         items = self.display_items
         if items:
             self.selected_index = max(0, min(self.selected_index, len(items) - 1))
@@ -2164,4 +2259,3 @@ class Mello:
             has_network=self._get_cached_network_status(),
         )
         return self.renderer.draw(ctx)
-

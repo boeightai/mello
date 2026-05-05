@@ -31,6 +31,9 @@ class EvdevTouchHandler:
         self._device: Optional['evdev.InputDevice'] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
+        self._healthy = False
+        self._failure_reason: Optional[str] = None
+        self._failure_lock = threading.Lock()
 
         # Wake signal for sleep mode (pygame.event.post from thread
         # doesn't reliably wake pygame.event.wait in KMSDRM mode)
@@ -49,12 +52,14 @@ class EvdevTouchHandler:
     def start(self) -> bool:
         """Start reading touch events. Returns True if successful."""
         if not EVDEV_AVAILABLE:
+            self._mark_failed('evdev not available')
             logger.debug('evdev not available, skipping touch handler')
             return False
         
         # Find touchscreen device
         self._device = self._find_touchscreen()
         if not self._device:
+            self._mark_failed('no touchscreen found')
             logger.warning('No touchscreen found')
             return False
         
@@ -73,13 +78,43 @@ class EvdevTouchHandler:
         
         # Start reader thread
         self._running = True
+        self._healthy = True
         self._thread = threading.Thread(target=self._read_loop, daemon=True)
         self._thread.start()
         return True
+
+    @property
+    def is_available(self) -> bool:
+        """True when a touchscreen device was found and the reader is running."""
+        return self._healthy and self._device is not None
+
+    @property
+    def device_name(self) -> Optional[str]:
+        """Human-readable touchscreen name, if detected."""
+        return self._device.name if self._device else None
+
+    @property
+    def device_path(self) -> Optional[str]:
+        """evdev path for the touchscreen, if detected."""
+        return self._device.path if self._device else None
+
+    def consume_failure_reason(self) -> Optional[str]:
+        """Return and clear the latest touch failure reason."""
+        with self._failure_lock:
+            reason = self._failure_reason
+            self._failure_reason = None
+            return reason
+
+    def _mark_failed(self, reason: str):
+        """Mark touch wake as unavailable and expose the reason to the app."""
+        self._healthy = False
+        with self._failure_lock:
+            self._failure_reason = reason
     
     def stop(self):
         """Stop reading touch events."""
         self._running = False
+        self._healthy = False
         if self._device:
             try:
                 self._device.close()
@@ -173,6 +208,11 @@ class EvdevTouchHandler:
         
         except Exception as e:
             if self._running:
+                self._mark_failed(f'touch read error: {e}')
                 logger.error(f'Touch read error: {e}')
+        else:
+            if self._running:
+                self._mark_failed('touch read loop exited')
+                logger.error('Touch read loop exited unexpectedly')
         
         logger.debug('Touch handler stopped')
