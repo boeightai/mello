@@ -603,6 +603,63 @@ _migrate_010() {
 }
 
 # ============================================
+# Migration 011: Converge Raspberry Pi Touch Display 2 boot config
+# ============================================
+_migrate_011() {
+  local BOOT_CONFIG=""
+  if [ -f /boot/firmware/config.txt ]; then
+    BOOT_CONFIG="/boot/firmware/config.txt"
+  elif [ -f /boot/config.txt ]; then
+    BOOT_CONFIG="/boot/config.txt"
+  else
+    log "Boot config not found, skipping display config migration"
+    return 0
+  fi
+
+  local changed=false
+
+  if grep -q "^display_auto_detect=1" "$BOOT_CONFIG" 2>/dev/null; then
+    sudo sed -i 's/^display_auto_detect=1/#display_auto_detect=1/' "$BOOT_CONFIG"
+    log "Commented display_auto_detect=1 in $BOOT_CONFIG"
+    changed=true
+  fi
+
+  if grep -q "^disable_splash=" "$BOOT_CONFIG" 2>/dev/null; then
+    if ! grep -q "^disable_splash=1" "$BOOT_CONFIG" 2>/dev/null; then
+      sudo sed -i 's/^disable_splash=.*/disable_splash=1/' "$BOOT_CONFIG"
+      log "Set disable_splash=1 in $BOOT_CONFIG"
+      changed=true
+    fi
+  else
+    echo "disable_splash=1" | sudo tee -a "$BOOT_CONFIG" > /dev/null
+    log "Added disable_splash=1 to $BOOT_CONFIG"
+    changed=true
+  fi
+
+  if grep -q "^dtoverlay=vc4-kms-dsi-ili9881-5inch" "$BOOT_CONFIG" 2>/dev/null; then
+    if ! grep -q "^dtoverlay=vc4-kms-dsi-ili9881-5inch,rotation=90" "$BOOT_CONFIG" 2>/dev/null; then
+      sudo sed -i 's/^dtoverlay=vc4-kms-dsi-ili9881-5inch.*/dtoverlay=vc4-kms-dsi-ili9881-5inch,rotation=90/' "$BOOT_CONFIG"
+      log "Set Raspberry Pi Touch Display 2 overlay rotation=90 in $BOOT_CONFIG"
+      changed=true
+    fi
+  else
+    {
+      echo ""
+      echo "# Mello: Raspberry Pi Touch Display 2 (5\", landscape)"
+      echo "dtoverlay=vc4-kms-dsi-ili9881-5inch,rotation=90"
+    } | sudo tee -a "$BOOT_CONFIG" > /dev/null
+    log "Added Raspberry Pi Touch Display 2 overlay to $BOOT_CONFIG"
+    changed=true
+  fi
+
+  if [ "$changed" = true ]; then
+    log "Display boot config changed — reboot required (not rebooting automatically)"
+  else
+    log "Display boot config already converged"
+  fi
+}
+
+# ============================================
 # Run all migrations
 # ============================================
 run_migration "001" "Bluetooth audio via PipeWire"
@@ -615,3 +672,4 @@ run_migration "007" "Mask getty@tty1 (missed by older installs)"
 run_migration "008" "Route go-librespot audio through PipeWire"
 run_migration "009" "Update sudoers for hciconfig down+up"
 run_migration "010" "Remove go-librespot audio_device (use default sink)"
+run_migration "011" "Converge Raspberry Pi Touch Display 2 boot config"
