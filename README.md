@@ -1,49 +1,49 @@
-# Mello
+# mello
 
-A distraction free Spotify speaker for kids
+a distraction free spotify speaker for kids
 
-Kids swipe through album covers and tap to play. Parents control the music library from Spotify on their phone.
+kids swipe through album covers and tap to play. parents control the music library from spotify on their phone.
 
-### Build Video
+### build video
 
-<a href="https://youtu.be/4tn8OtKkvs8"><img src="assets/videothumb.png" width="440" alt="Build video"></a>
+<a href="https://youtu.be/4tn8OtKkvs8"><img src="assets/videothumb.png" width="440" alt="build video"></a>
 
-## Features
+## features
 
-- **Spotify Connect** — Add albums and playlists from your Spotify app, Mello plays them
-- **Album carousel** — Large cover art with smooth swipe navigation
-- **Simple controls** — Play, pause, skip. That's it
-- **Auto-sleep** — Screen turns off after 2 minutes of inactivity
-- **Auto-pause** — Music stops after 30 minutes (configurable) to prevent all-day playback
-- **Progress memory** — Remembers where each album left off for up to 96 hours
-- **Bluetooth** — Connect wireless headphones or speakers
-- **WiFi setup** — Creates a hotspot for easy configuration if WiFi drops
-- **Auto-updates** — Pulls latest changes from GitHub nightly
-- **No account needed on the device** — Authentication happens via Spotify on your phone
+- **spotify connect** — add albums and playlists from your spotify app, mello plays them
+- **album carousel** — large cover art with smooth swipe navigation
+- **simple controls** — play, pause, skip. that's it
+- **auto-sleep** — screen turns off after 2 minutes of inactivity
+- **auto-pause** — music stops after 30 minutes (configurable) to prevent all-day playback
+- **progress memory** — remembers where each album left off for up to 96 hours
+- **bluetooth** — connect wireless headphones or speakers
+- **wifi setup** — creates a hotspot for easy configuration if wifi drops
+- **auto-updates** — pulls latest changes from github nightly
+- **no account needed on the device** — authentication happens via spotify on your phone
 
-## Hardware
+## hardware
 
-Print the case from [MakerWorld](https://makerworld.com/en/models/2692843-distraction-free-spotify-player-for-kids).
+print the case from [makerworld](https://makerworld.com/en/models/2692843-distraction-free-spotify-player-for-kids).
 
-| Part | Link |
+| part | link |
 |------|------|
-| Raspberry Pi 3 Model B | [Amazon](https://www.amazon.com/dp/B07BDR5PDW) |
-| Raspberry Pi Touch Display 2 (5") | [Amazon](https://www.amazon.com/dp/B0FMYFKDLZ) |
-| WM8960 Audio HAT | [Amazon](https://www.amazon.com/dp/B07KN8424G) |
-| 5.1V 3A USB-C Power Supply | [Amazon](https://www.amazon.com/dp/B0CLV6WB4L) |
-| USB-C Panel Mount Bushing | [Amazon](https://www.amazon.com/dp/B0CDC1X4BY) |
-| Micro SD Card (16GB+) | — |
+| raspberry pi 3 model b | [amazon](https://www.amazon.com/dp/B07BDR5PDW) |
+| raspberry pi touch display 2 (5") | [amazon](https://www.amazon.com/dp/B0FMYFKDLZ) |
+| wm8960 audio hat | [amazon](https://www.amazon.com/dp/B07KN8424G) |
+| 5.1v 3a usb-c power supply | [amazon](https://www.amazon.com/dp/B0CLV6WB4L) |
+| usb-c panel mount bushing | [amazon](https://www.amazon.com/dp/B0CDC1X4BY) |
+| micro sd card (16gb+) | — |
 
-## Quick Start
+## quick start
 
-### 1. Flash Raspberry Pi OS
+### 1. flash raspberry pi os
 
-Use the [Raspberry Pi Imager](https://www.raspberrypi.com/software/):
-- Choose **Raspberry Pi OS Lite (64-bit)**
-- Choose a hostname and username (e.g. `mello` / `mello`)
-- Configure WiFi and enable SSH
+use the [raspberry pi imager](https://www.raspberrypi.com/software/):
+- choose **raspberry pi os lite (64-bit)**
+- choose a hostname and username (e.g. `mello` / `mello`)
+- configure wifi and enable ssh
 
-### 2. Install Mello
+### 2. install mello
 
 ```bash
 ssh <your-user>@<your-hostname>.local
@@ -51,85 +51,85 @@ curl -sSL https://raw.githubusercontent.com/emieljanson/mello/main/install.sh | 
 sudo reboot
 ```
 
-To install without anonymous usage analytics:
+to install without anonymous usage analytics:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/emieljanson/mello/main/install.sh | bash -s -- --no-analytics
 ```
 
-### 3. Connect Spotify
+### 3. connect spotify
 
-1. Open Spotify on your phone
-2. Tap the speaker icon
-3. Select "Mello"
-4. Start playing — it shows up on the touchscreen
+1. open spotify on your phone
+2. tap the speaker icon
+3. select "mello"
+4. start playing — it shows up on the touchscreen
 
-## How It Works
+## how it works
 
-Mello is a Python app using Pygame for the UI and [go-librespot](https://github.com/devgianlu/go-librespot) as a Spotify Connect receiver. When you select Mello as a speaker in Spotify and play an album, go-librespot handles the audio stream while Mello displays the album art and provides touch controls.
+mello is a python app using pygame for the ui and [go-librespot](https://github.com/devgianlu/go-librespot) as a spotify connect receiver. when you select mello as a speaker in spotify and play an album, go-librespot handles the audio stream while mello displays the album art and provides touch controls.
 
 ```
-Your phone (Spotify app)
+your phone (spotify app)
     │
     ▼
-go-librespot (Spotify Connect daemon)
+go-librespot (spotify connect daemon)
     │
     ▼
-Mello (Pygame UI + touch input)
+mello (pygame ui + touch input)
     │
     ▼
-Touchscreen + Speaker
+touchscreen + speaker
 ```
 
-Albums and playlists you play are automatically saved to the device. Kids can then browse and play them independently from the touchscreen.
+albums and playlists you play are automatically saved to the device. kids can then browse and play them independently from the touchscreen.
 
-## Settings Menu
+## settings menu
 
-> **How to open:** Press and hold the volume button for 3 seconds. There's no gear icon or visible button — the long-press on the volume button is the only way in.
+> **how to open:** press and hold the volume button for 3 seconds. there's no gear icon or visible button — the long-press on the volume button is the only way in.
 
-Once open, you'll see a scrollable menu with these sections:
+once open, you'll see a scrollable menu with these sections:
 
-### Connections
-- **WiFi** — View saved networks, connect to a new one, or switch. If WiFi drops, Mello creates a "Mello-Setup" hotspot you can connect to from your phone
-- **Bluetooth** — Pair and connect wireless headphones or speakers. Shows paired devices and nearby discoverable devices
-- **Volume levels** — Set separate volume levels (low/mid/high) for the built-in speaker and Bluetooth output
+### connections
+- **wifi** — view saved networks, connect to a new one, or switch. if wifi drops, mello creates a "mello-setup" hotspot you can connect to from your phone
+- **bluetooth** — pair and connect wireless headphones or speakers. shows paired devices and nearby discoverable devices
+- **volume levels** — set separate volume levels (low/mid/high) for the built-in speaker and bluetooth output
 
-### Playback settings
-- **Auto-pause** — How long Mello plays before automatically pausing (15, 30, 60, or 120 minutes). Tap to cycle through options. Default: 30 minutes
-- **Remember progress** — How long Mello remembers where each album left off (12, 24, 48, or 96 hours). Tap to cycle. Default: 96 hours
+### playback settings
+- **auto-pause** — how long mello plays before automatically pausing (15, 30, 60, or 120 minutes). tap to cycle through options. default: 30 minutes
+- **remember progress** — how long mello remembers where each album left off (12, 24, 48, or 96 hours). tap to cycle. default: 96 hours
 
-### System
-- **Check for updates** — Manually check for and install updates (Mello also updates automatically each night)
-- **Reset** — Factory reset: clears all albums, WiFi, Bluetooth, Spotify credentials, and settings. Requires a second tap to confirm
+### system
+- **check for updates** — manually check for and install updates (mello also updates automatically each night)
+- **reset** — factory reset: clears all albums, wifi, bluetooth, spotify credentials, and settings. requires a second tap to confirm
 
-To close the menu, tap the **✕** in the top-right corner.
+to close the menu, tap the **✕** in the top-right corner.
 
-### Usage Data
+### usage data
 
-During installation, Mello asks if you'd like to share anonymous usage data. This helps improve the project. Only session-level events are collected (play/pause, sleep/wake) — no personal data or music choices. The choice is made once during setup.
+during installation, mello asks if you'd like to share anonymous usage data. this helps improve the project. only session-level events are collected (play/pause, sleep/wake) — no personal data or music choices. the choice is made once during setup.
 
-## Known Issues
+## known issues
 
-**Spotify "audio key error" — tracks skip without playing.** This is an upstream issue in librespot (the library that handles Spotify Connect). It affects some Spotify accounts but not others, and there's no fix yet. Mello uses [go-librespot](https://github.com/devgianlu/go-librespot) which is affected by the same problem. Track the issue here: [librespot-org/librespot#1649](https://github.com/librespot-org/librespot/issues/1649)
+**spotify "audio key error" — tracks skip without playing.** this is an upstream issue in librespot (the library that handles spotify connect). it affects some spotify accounts but not others, and there's no fix yet. mello uses [go-librespot](https://github.com/devgianlu/go-librespot) which is affected by the same problem. track the issue here: [librespot-org/librespot#1649](https://github.com/librespot-org/librespot/issues/1649)
 
-## Show Off Your Build
+## show off your build
 
-Built a Mello? I'd love to see it! Share a photo on Twitter/X and tag [@emieljanson](https://x.com/emieljanson).
+built a mello? i'd love to see it! share a photo on twitter/x and tag [@emieljanson](https://x.com/emieljanson).
 
-## Contributing
+## contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+see [contributing.md](CONTRIBUTING.md) for development setup and guidelines.
 
-## Security
+## security
 
-See [SECURITY.md](SECURITY.md) for the security policy and responsible disclosure.
+see [security.md](SECURITY.md) for the security policy and responsible disclosure.
 
-## License
+## license
 
-[MIT](LICENSE)
+[mit](LICENSE)
 
-## Acknowledgments
+## acknowledgments
 
-- [go-librespot](https://github.com/devgianlu/go-librespot) — Spotify Connect implementation
-- [Pygame](https://www.pygame.org/) — UI framework
-- [PostHog](https://posthog.com/) — Anonymous usage analytics
+- [go-librespot](https://github.com/devgianlu/go-librespot) — spotify connect implementation
+- [pygame](https://www.pygame.org/) — ui framework
+- [posthog](https://posthog.com/) — anonymous usage analytics
