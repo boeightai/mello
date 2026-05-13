@@ -37,6 +37,7 @@ class SleepManager:
         self.drm_dpms_path = self._detect_drm_connector()
         self._saved_governor: Optional[str] = None
         self._saved_led_trigger: Optional[str] = None
+        self._sleep_started_at: Optional[float] = None
         
         if self.backlight_path:
             logger.info(f'Backlight: {self.backlight_path}')
@@ -147,27 +148,30 @@ class SleepManager:
         if self.is_sleeping:
             return
         
-        logger.info('Entering sleep mode...')
+        logger.info(f'Entering sleep mode... diag_before={self._display_diag()}')
         self.is_sleeping = True
+        self._sleep_started_at = time.time()
         self._set_display(False)
         self._set_low_power_cpu(True)
         self._set_led(False)
         self._set_wifi_power_save(True)
-        logger.info('Sleep mode active (display off, CPU low, LED off, WiFi ps)')
+        logger.info(f'Sleep mode active (display off, CPU low, LED off, WiFi ps) diag_after={self._display_diag()}')
     
-    def wake_up(self):
+    def wake_up(self, reason: str = 'activity'):
         """Wake from sleep mode - restore full power."""
         if not self.is_sleeping:
             return
         
-        logger.info('Waking up...')
+        slept_for = time.time() - self._sleep_started_at if self._sleep_started_at else None
+        slept_text = f'{slept_for:.1f}s' if slept_for is not None else 'unknown'
+        logger.info(f'Waking up... reason={reason}, slept_for={slept_text}, diag_before={self._display_diag()}')
         self.is_sleeping = False
         self.last_activity = time.time()
         self._set_wifi_power_save(False)
         self._set_led(True)
         self._set_low_power_cpu(False)
         self._set_display(True)
-        logger.info('Awake (display on, CPU normal, LED on)')
+        logger.info(f'Awake (display on, CPU normal, LED on) diag_after={self._display_diag()}')
     
     def _set_display(self, on: bool):
         """Turn display on/off via backlight only.
@@ -183,8 +187,12 @@ class SleepManager:
                 value = '0' if on else '1'
                 with open(self.backlight_path, 'w') as f:
                     f.write(value)
+                actual = self._read_sysfs(self.backlight_path)
+                logger.info(f'Backlight {state}: wrote={value}, actual={actual}, path={self.backlight_path}')
             except (IOError, OSError, PermissionError) as e:
                 logger.warning(f'Backlight {state} failed: {e}')
+        else:
+            logger.warning(f'Backlight {state} skipped: no backlight path detected')
     
     def _set_low_power_cpu(self, low_power: bool):
         """Switch CPU governor: 'powersave' locks at 600MHz, 'ondemand' scales up."""
@@ -251,3 +259,16 @@ class SleepManager:
             end = content.index(']')
             return content[start:end]
         return content
+
+    def _display_diag(self) -> dict:
+        """Small display power snapshot for diagnosing black-screen wake issues."""
+        diag = {
+            'backlight_path': self.backlight_path,
+            'backlight': self._read_sysfs(self.backlight_path) if self.backlight_path else None,
+            'dpms_path': self.drm_dpms_path,
+            'dpms': self._read_sysfs(self.drm_dpms_path) if self.drm_dpms_path else None,
+        }
+        if self.drm_dpms_path:
+            status_path = self.drm_dpms_path.rsplit('/', 1)[0] + '/status'
+            diag['drm_status'] = self._read_sysfs(status_path)
+        return diag

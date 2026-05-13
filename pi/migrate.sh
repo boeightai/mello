@@ -660,6 +660,42 @@ _migrate_011() {
 }
 
 # ============================================
+# Migration 012: Reboot after display boot config changes
+# ============================================
+_migrate_012() {
+  local BOOT_CONFIG=""
+  if [ -f /boot/firmware/config.txt ]; then
+    BOOT_CONFIG="/boot/firmware/config.txt"
+  elif [ -f /boot/config.txt ]; then
+    BOOT_CONFIG="/boot/config.txt"
+  else
+    log "Boot config not found, skipping display reboot check"
+    return 0
+  fi
+
+  # Migration 011 changes boot-time display configuration. Field testing showed
+  # the DSI panel can stay wedged until the Pi actually boots with that config.
+  # Reboot only when the boot config was modified after the current boot.
+  local boot_time
+  local config_time
+  boot_time=$(awk '/^btime / {print $2}' /proc/stat)
+  config_time=$(stat -c %Y "$BOOT_CONFIG")
+
+  if [ "$config_time" -le "$boot_time" ]; then
+    log "Display boot config already applied by current boot"
+    return 0
+  fi
+
+  if ! grep -q "^dtoverlay=vc4-kms-dsi-ili9881-5inch,rotation=90" "$BOOT_CONFIG" 2>/dev/null; then
+    log "Touch Display 2 overlay not active in boot config, skipping reboot"
+    return 0
+  fi
+
+  log "Display boot config changed after current boot — rebooting now"
+  sudo systemctl reboot --no-wall
+}
+
+# ============================================
 # Run all migrations
 # ============================================
 run_migration "001" "Bluetooth audio via PipeWire"
@@ -673,3 +709,4 @@ run_migration "008" "Route go-librespot audio through PipeWire"
 run_migration "009" "Update sudoers for hciconfig down+up"
 run_migration "010" "Remove go-librespot audio_device (use default sink)"
 run_migration "011" "Converge Raspberry Pi Touch Display 2 boot config"
+run_migration "012" "Reboot after display boot config changes"
