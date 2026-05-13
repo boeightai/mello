@@ -35,3 +35,42 @@ def test_status_request_exception_returns_none():
     status = api.status()
 
     assert status is None
+
+
+def test_set_repeat_context_posts_expected_body():
+    api = LibrespotAPI("http://localhost:3678")
+    resp = MagicMock()
+    resp.ok = True
+    resp.status_code = 200
+    api.session.post = MagicMock(return_value=resp)
+
+    result = api.set_repeat_context(True)
+
+    assert result is True
+    api.session.post.assert_called_once_with(
+        "http://localhost:3678/player/repeat_context",
+        json={"repeat_context": True},
+        timeout=2,
+    )
+
+
+def test_set_repeat_context_failure_returns_false():
+    api = LibrespotAPI("http://localhost:3678")
+    resp = MagicMock()
+    resp.ok = False
+    resp.status_code = 500
+    resp.text = "boom"
+    api.session.post = MagicMock(return_value=resp)
+
+    result = api.set_repeat_context(True)
+
+    assert result is False
+
+
+def test_set_repeat_context_request_exception_returns_false():
+    api = LibrespotAPI("http://localhost:3678")
+    api.session.post = MagicMock(side_effect=requests.RequestException("boom"))
+
+    result = api.set_repeat_context(True)
+
+    assert result is False

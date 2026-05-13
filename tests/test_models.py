@@ -40,6 +40,12 @@ class TestLibrespotStatus:
         assert s.position == 30000
         assert s.duration == 260000
         assert s.context_uri == 'spotify:album:abbey'
+        assert s.repeat_context is False
+
+    def test_parses_repeat_context(self):
+        raw = {'stopped': False, 'paused': False, 'repeat_context': True, 'track': {}}
+        s = LibrespotStatus.from_dict(raw)
+        assert s.repeat_context is True
 
     def test_parses_paused_state(self):
         raw = {'stopped': False, 'paused': True, 'track': {}}

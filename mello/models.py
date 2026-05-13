@@ -32,6 +32,7 @@ class LibrespotStatus:
     track_uri: Optional[str] = None
     position: int = 0
     duration: int = 0
+    repeat_context: bool = False
 
     @classmethod
     def from_dict(cls, data: dict, context_uri: Optional[str] = None) -> 'LibrespotStatus':
@@ -59,6 +60,7 @@ class LibrespotStatus:
             track_uri=track.get('uri'),
             position=track.get('position', 0),
             duration=track.get('duration', 0),
+            repeat_context=bool(data.get('repeat_context', False)),
         )
 
 
@@ -90,6 +92,7 @@ class NowPlaying:
     track_uri: Optional[str] = None
     position: int = 0
     duration: int = 0
+    repeat_context: bool = False
     
     @property
     def progress(self) -> float:
@@ -168,4 +171,3 @@ class PlayState:
         if self.pending_action == 'play' or self.should_show_loading:
             return True
         return actual_playing
-
