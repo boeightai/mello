@@ -22,6 +22,7 @@ class LibrespotAPIProtocol(Protocol):
     def prev(self) -> bool: ...
     def seek(self, position: int) -> bool: ...
     def set_volume(self, level: int) -> bool: ...
+    def set_repeat_context(self, enabled: bool) -> bool: ...
     def is_connected(self) -> bool: ...
     def metrics_snapshot(self) -> dict: ...
 
@@ -226,6 +227,22 @@ class LibrespotAPI:
             logger.error(f'Volume error setting level {level}%', exc_info=True)
             self._record_result('volume', False)
             return False
+
+    def set_repeat_context(self, enabled: bool) -> bool:
+        """Set Spotify repeat mode for the current context (album/playlist)."""
+        try:
+            resp = self.session.post(
+                f'{self.base_url}/player/repeat_context',
+                json={'repeat_context': enabled},
+                timeout=2,
+            )
+            logger.info(f'Repeat context {enabled}: {resp.status_code}')
+            if not resp.ok:
+                logger.warning(f'Repeat context failed: {resp.status_code} {resp.text}')
+            return resp.ok
+        except requests.RequestException as e:
+            logger.warning(f'Repeat context error (enabled={enabled}): {e}')
+            return False
     
     def is_connected(self) -> bool:
         """Check if librespot is reachable (may or may not have an active session)."""
@@ -274,10 +291,12 @@ class NullLibrespotAPI:
     
     def set_volume(self, level: int) -> bool:
         return True
+
+    def set_repeat_context(self, enabled: bool) -> bool:
+        return True
     
     def is_connected(self) -> bool:
         return True
 
     def metrics_snapshot(self) -> dict:
         return {'suppressed': {}, 'failures': {}}
-

@@ -28,7 +28,7 @@ from .models import CatalogItem, NowPlaying, LibrespotStatus, MenuState
 from .api import LibrespotAPI, NullLibrespotAPI, CatalogManager
 from .handlers import TouchHandler, EventListener, EvdevTouchHandler
 from .managers import SleepManager, SmoothCarousel, PlayTimer, PerformanceMonitor, AutoPauseManager, SetupMenu, Settings, UsageTracker, BluetoothManager
-from .controllers import VolumeController, PlaybackController
+from .controllers import VolumeController, PlaybackController, is_repeatable_spotify_context
 from .ui import ImageCache, Renderer, RenderContext
 from .utils import run_async, get_runtime_version_label, set_system_volume
 
@@ -313,6 +313,8 @@ class Mello:
         self._last_snap_pause_at: float = 0.0
         self._last_restore_handled_at: float = 0.0
         self._restore_dedup_count: int = 0
+        self._repeat_context_uri: Optional[str] = None
+        self._repeat_context_last_attempt: float = 0.0
         # Blocks auto-play after an explicit user pause until user gives a
         # positive play intent (play tap or context switch).
         self._manual_pause_lock: bool = False
@@ -1083,6 +1085,7 @@ class Mello:
                 track_uri=status.track_uri,
                 position=status.position,
                 duration=status.duration,
+                repeat_context=status.repeat_context,
             )
 
             if status.context_uri != old_ctx or status.playing != old_playing:
@@ -1103,6 +1106,7 @@ class Mello:
             
             self._update_temp_item()
             self._check_autoplay()
+            self._ensure_repeat_context_for_current_status()
             
             if status.playing and self.sleep_manager.is_sleeping:
                 self._wake_from_sleep('spotify_playing')
@@ -1129,6 +1133,34 @@ class Mello:
     def _check_autoplay(self):
         """Detect autoplay and clear progress when context finishes."""
         self.playback.check_autoplay(self.now_playing)
+
+    def _ensure_repeat_context_for_current_status(self):
+        """Keep externally-started albums/playlists inside their context."""
+        np = self.now_playing
+        context_uri = np.context_uri
+        if not np.playing or not is_repeatable_spotify_context(context_uri):
+            return
+
+        if np.repeat_context:
+            self._repeat_context_uri = context_uri
+            return
+
+        now = time.time()
+        if self._repeat_context_uri == context_uri and now - self._repeat_context_last_attempt < 15.0:
+            return
+
+        self._repeat_context_uri = context_uri
+        self._repeat_context_last_attempt = now
+        logger.info(f'repeat_context_request | reason=status_playing | uri={context_uri[:50]}')
+
+        def _set_repeat():
+            ok = self.api.set_repeat_context(True)
+            if ok:
+                logger.info(f'repeat_context_on | reason=status_playing | uri={context_uri[:50]}')
+            else:
+                logger.warning(f'repeat_context_failed | reason=status_playing | uri={context_uri[:50]}')
+
+        run_async(_set_repeat)
     
     def _update_temp_item(self):
         """Update tempItem based on current playback context.

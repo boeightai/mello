@@ -22,6 +22,7 @@ def _make_controller(**overrides):
     api.resume.return_value = True
     api.seek.return_value = True
     api.set_volume.return_value = True
+    api.set_repeat_context.return_value = True
     api.is_connected.return_value = True
 
     catalog = MagicMock()
@@ -338,6 +339,48 @@ class TestPlayFailure:
         pc._execute_play('spotify:album:x', from_beginning=False, epoch=0)
 
         assert pc.play_state.pending_action == 'play'
+
+
+class TestRepeatContext:
+    """Albums/playlists should loop instead of falling into Spotify suggestions."""
+
+    @patch('mello.controllers.playback.time.sleep')
+    def test_album_play_enables_repeat_context(self, mock_sleep):
+        pc, api, _, _ = _make_controller()
+        api.play.return_value = True
+
+        pc._execute_play('spotify:album:x', from_beginning=False, epoch=0)
+
+        api.set_repeat_context.assert_called_once_with(True)
+
+    @patch('mello.controllers.playback.time.sleep')
+    def test_playlist_play_enables_repeat_context(self, mock_sleep):
+        pc, api, _, _ = _make_controller()
+        api.play.return_value = True
+
+        pc._execute_play('spotify:playlist:x', from_beginning=False, epoch=0)
+
+        api.set_repeat_context.assert_called_once_with(True)
+
+    @patch('mello.controllers.playback.time.sleep')
+    def test_track_play_does_not_enable_repeat_context(self, mock_sleep):
+        pc, api, _, _ = _make_controller()
+        api.play.return_value = True
+
+        pc._execute_play('spotify:track:x', from_beginning=False, epoch=0)
+
+        api.set_repeat_context.assert_not_called()
+
+    @patch('mello.controllers.playback.time.sleep')
+    def test_repeat_context_failure_does_not_block_play_commit(self, mock_sleep):
+        on_committed = MagicMock()
+        pc, api, _, _ = _make_controller(on_play_committed=on_committed)
+        api.play.return_value = True
+        api.set_repeat_context.return_value = False
+
+        pc._execute_play('spotify:album:x', from_beginning=False, epoch=0)
+
+        on_committed.assert_called_once_with('spotify:album:x', 0)
 
 
 class TestLibrespotCrashRecovery:

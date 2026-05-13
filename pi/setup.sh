@@ -172,6 +172,7 @@ audio_backend: "alsa"
 external_volume: true
 initial_volume: 100
 bitrate: 320
+disable_autoplay: true
 server:
   enabled: true
   port: 3678

@@ -166,36 +166,36 @@ class TestFadeOutAndRestore:
         on_pause = MagicMock()
         mgr = AutoPauseManager(
             on_pause=on_pause,
-            get_volume=MagicMock(return_value=(100, 80)),
+            get_volume=MagicMock(return_value=100),
         )
-        mgr._original_volume = (100, 80)
+        mgr._original_volume = 100
         mgr._is_fading = True
 
         mgr._fade_out_and_pause()
 
         on_pause.assert_called_once()
         last_restore_call = mock_vol.call_args_list[-1]
-        assert last_restore_call == ((100, 80),)
+        assert last_restore_call == ((100,),)
 
     @patch('mello.managers.auto_pause.set_system_volume')
     def test_restore_volume_if_needed(self, mock_vol):
         mgr = AutoPauseManager(
             on_pause=MagicMock(),
-            get_volume=MagicMock(return_value=(100, 80)),
+            get_volume=MagicMock(return_value=100),
         )
-        mgr._original_volume = (90, 70)
+        mgr._original_volume = 90
         mgr._should_restore_volume = True
 
         mgr.restore_volume_if_needed()
 
-        mock_vol.assert_called_once_with(90, 70)
+        mock_vol.assert_called_once_with(90)
         assert mgr._should_restore_volume is False
 
     @patch('mello.managers.auto_pause.set_system_volume')
     def test_restore_does_nothing_when_not_needed(self, mock_vol):
         mgr = AutoPauseManager(
             on_pause=MagicMock(),
-            get_volume=MagicMock(return_value=(100, 80)),
+            get_volume=MagicMock(return_value=100),
         )
         mgr.restore_volume_if_needed()
         mock_vol.assert_not_called()

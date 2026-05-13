@@ -696,6 +696,37 @@ _migrate_012() {
 }
 
 # ============================================
+# Migration 013: Disable Spotify suggested autoplay
+# ============================================
+_migrate_013() {
+  # Keep albums/playlists inside their selected context. Mello also sets
+  # repeat_context at runtime, but this config prevents Spotify suggestions if
+  # repeat state is lost after a librespot restart.
+  local CONFIG="$HOME/.config/go-librespot/config.yml"
+  if [ ! -f "$CONFIG" ]; then
+    log "go-librespot config not found, skipping disable_autoplay"
+    return 0
+  fi
+
+  if grep -q '^disable_autoplay:' "$CONFIG"; then
+    if grep -q '^disable_autoplay: true' "$CONFIG"; then
+      log "go-librespot config: disable_autoplay already true"
+    else
+      sed -i 's/^disable_autoplay:.*/disable_autoplay: true/' "$CONFIG"
+      log "go-librespot config: set disable_autoplay -> true"
+    fi
+    return 0
+  fi
+
+  if grep -q '^bitrate:' "$CONFIG"; then
+    sed -i '/^bitrate:/a disable_autoplay: true' "$CONFIG"
+  else
+    printf '\ndisable_autoplay: true\n' >> "$CONFIG"
+  fi
+  log "go-librespot config: added disable_autoplay: true"
+}
+
+# ============================================
 # Run all migrations
 # ============================================
 run_migration "001" "Bluetooth audio via PipeWire"
@@ -710,3 +741,4 @@ run_migration "009" "Update sudoers for hciconfig down+up"
 run_migration "010" "Remove go-librespot audio_device (use default sink)"
 run_migration "011" "Converge Raspberry Pi Touch Display 2 boot config"
 run_migration "012" "Reboot after display boot config changes"
+run_migration "013" "Disable Spotify suggested autoplay"
