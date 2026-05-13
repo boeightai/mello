@@ -277,6 +277,7 @@ class Mello:
         self._running = threading.Event()
         self._running.set()
         self._poll_wake_event = threading.Event()
+        self._last_sleep_wait_log: float = 0.0
         
         # TempItem and delete mode (with lock for thread-safe access)
         self.temp_item: Optional[CatalogItem] = None
@@ -865,20 +866,19 @@ class Mello:
                 self.evdev_touch.wake_event.wait(0.2)
                 if self.evdev_touch.wake_event.is_set():
                     self.evdev_touch.wake_event.clear()
-                    self.sleep_manager.wake_up()
-                    self._on_wake()
+                    self._wake_from_sleep('evdev_touch')
                     pygame.event.clear()  # Discard stale events from sleep
                     continue
                 # Check for keyboard/quit events that bypass evdev
                 for event in pygame.event.get():
                     if event.type == pygame.KEYDOWN:
-                        self.sleep_manager.wake_up()
-                        self._on_wake()
+                        self._wake_from_sleep(f'key:{event.key}')
                         pygame.event.clear()
                         break
                     elif event.type == pygame.QUIT:
                         self.running = False
                         break
+                self._log_sleep_wait_if_due()
                 continue
             
             self._handle_events()
@@ -917,7 +917,7 @@ class Mello:
         
         # Restore display before exit so next boot doesn't start with black screen
         if self.sleep_manager.is_sleeping:
-            self.sleep_manager.wake_up()
+            self.sleep_manager.wake_up('shutdown')
         
         self.events.stop()
         self.evdev_touch.stop()
@@ -1109,8 +1109,7 @@ class Mello:
             self._ensure_repeat_context_for_current_status()
             
             if status.playing and self.sleep_manager.is_sleeping:
-                self.sleep_manager.wake_up()
-                self._on_wake()
+                self._wake_from_sleep('spotify_playing')
             
             if status.playing:
                 self.auto_pause.on_play(status.context_uri)
@@ -1274,8 +1273,7 @@ class Mello:
                 logger.debug(f'Event: MOUSEBUTTONDOWN at {event.pos}')
                 if self.sleep_manager.is_sleeping:
                     self._user_activated_playback = True
-                    self.sleep_manager.wake_up()
-                    self._on_wake()
+                    self._wake_from_sleep(f'pygame_touch:{event.pos}')
                     continue
                 self.sleep_manager.reset_timer()
                 self._handle_touch_down(event.pos)
@@ -1283,8 +1281,7 @@ class Mello:
             elif event.type == pygame.KEYDOWN:
                 if self.sleep_manager.is_sleeping:
                     self._user_activated_playback = True
-                    self.sleep_manager.wake_up()
-                    self._on_wake()
+                    self._wake_from_sleep(f'pygame_key:{event.key}')
                     continue
                 self.sleep_manager.reset_timer()
                 self._handle_key(event.key)
@@ -1660,6 +1657,31 @@ class Mello:
                 logger.info('=' * 40)
         
         run_async(wake_refresh)
+
+    def _wake_from_sleep(self, reason: str):
+        """Wake from sleep and emit one high-signal diagnostic line."""
+        if not self.sleep_manager.is_sleeping:
+            return
+        logger.info(
+            f'Wake requested | reason={reason} | '
+            f'touch_available={self.evdev_touch.is_available} | '
+            f'touch_device={self.evdev_touch.device_name or "none"} | '
+            f'touch_path={self.evdev_touch.device_path or "none"}'
+        )
+        self.sleep_manager.wake_up(reason)
+        self._on_wake()
+
+    def _log_sleep_wait_if_due(self):
+        """Log periodic sleeping heartbeat so black-screen reports have context."""
+        now = time.time()
+        if now - self._last_sleep_wait_log < 60:
+            return
+        self._last_sleep_wait_log = now
+        logger.info(
+            f'Sleep wait | touch_available={self.evdev_touch.is_available} | '
+            f'touch_device={self.evdev_touch.device_name or "none"} | '
+            f'wake_event_set={self.evdev_touch.wake_event.is_set()}'
+        )
         
     
     def _has_network_connection(self) -> bool:
