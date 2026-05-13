@@ -6,7 +6,7 @@ import threading
 import types
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import sys
@@ -46,7 +46,7 @@ def _make_mello(items: list[CatalogItem], now_playing: NowPlaying) -> Mello:
         stop_all=MagicMock(),
         is_item_playing=lambda item, now_playing: item.uri == now_playing.context_uri and now_playing.playing,
     )
-    app.api = SimpleNamespace(pause=MagicMock())
+    app.api = SimpleNamespace(pause=MagicMock(), set_repeat_context=MagicMock(return_value=True))
     app.volume = SimpleNamespace(unmute=MagicMock(), mute=MagicMock())
     app.renderer = SimpleNamespace(invalidate=MagicMock())
     app._focus_epoch = 0
@@ -63,6 +63,8 @@ def _make_mello(items: list[CatalogItem], now_playing: NowPlaying) -> Mello:
     app._user_activated_playback = True
     app._context_switch_stall_since = 0.0
     app._last_context_watchdog_log = 0.0
+    app._repeat_context_uri = None
+    app._repeat_context_last_attempt = 0.0
     app._status_unknown = False
     app._connected_lock = threading.Lock()
     app._connected = True
@@ -89,6 +91,44 @@ class TestRemoteFocusSync:
         app.renderer.invalidate.assert_called_once()
         assert app._focus_epoch == 1
         assert app._pending_external_focus_uri is None
+
+
+class TestRepeatContextSync:
+    """Remote Spotify playback should also get repeat-context protection."""
+
+    def test_external_album_playback_enables_repeat_context(self):
+        app = _make_mello(
+            [_item('1', 'spotify:album:a', 'A')],
+            NowPlaying(playing=True, context_uri='spotify:album:a', repeat_context=False),
+        )
+
+        with patch('mello.app.run_async') as mock_run:
+            mock_run.side_effect = lambda fn, *a: fn(*a)
+            app._ensure_repeat_context_for_current_status()
+
+        app.api.set_repeat_context.assert_called_once_with(True)
+        assert app._repeat_context_uri == 'spotify:album:a'
+
+    def test_external_album_repeat_true_does_not_call_api(self):
+        app = _make_mello(
+            [_item('1', 'spotify:album:a', 'A')],
+            NowPlaying(playing=True, context_uri='spotify:album:a', repeat_context=True),
+        )
+
+        app._ensure_repeat_context_for_current_status()
+
+        app.api.set_repeat_context.assert_not_called()
+        assert app._repeat_context_uri == 'spotify:album:a'
+
+    def test_external_track_playback_does_not_enable_repeat_context(self):
+        app = _make_mello(
+            [_item('1', 'spotify:track:a', 'A')],
+            NowPlaying(playing=True, context_uri='spotify:track:a', repeat_context=False),
+        )
+
+        app._ensure_repeat_context_for_current_status()
+
+        app.api.set_repeat_context.assert_not_called()
 
     def test_sync_defers_while_user_intent_is_active(self):
         items = [

@@ -18,6 +18,16 @@ from .volume import VolumeController
 logger = logging.getLogger(__name__)
 
 
+def is_repeatable_spotify_context(uri: Optional[str]) -> bool:
+    """True for Spotify contexts that should loop on Mello."""
+    return bool(
+        uri and (
+            uri.startswith('spotify:album:') or
+            uri.startswith('spotify:playlist:')
+        )
+    )
+
+
 class PlaybackController:
     """Owns play/pause/resume and progress tracking."""
 
@@ -401,6 +411,7 @@ class PlaybackController:
                     return
                 self._failed_play = None
                 self._failed_play_since = 0.0
+                self._enable_repeat_context_if_needed(uri, 'play_success')
                 self.volume.unmute()
                 self.play_state.stop_loading()
                 self._on_play_committed(uri, epoch)
@@ -483,6 +494,16 @@ class PlaybackController:
     def _is_pause_override_active(self) -> bool:
         """True when pause override window is still active."""
         return time.time() < self._pause_override_until
+
+    def _enable_repeat_context_if_needed(self, uri: str, reason: str):
+        """Loop albums/playlists so Spotify does not continue into suggestions."""
+        if not is_repeatable_spotify_context(uri):
+            return
+        ok = self.api.set_repeat_context(True)
+        if ok:
+            logger.info(f'repeat_context_on | reason={reason} | uri={uri[:50]}')
+        else:
+            logger.warning(f'repeat_context_failed | reason={reason} | uri={uri[:50]}')
 
     def _save_progress_async(
         self,
