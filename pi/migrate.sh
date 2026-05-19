@@ -727,6 +727,37 @@ _migrate_013() {
 }
 
 # ============================================
+# Migration 014: Keep librespot independent of UI sleep/restarts
+# ============================================
+_migrate_014() {
+  local CODE_DIR="$HOME/mello"
+  [ -d "$CODE_DIR" ] || CODE_DIR="$HOME/tomo"
+  [ -d "$CODE_DIR" ] || CODE_DIR="$HOME/berry"
+
+  local SERVICE="/etc/systemd/system/mello-librespot.service"
+  local TEMPLATE="$CODE_DIR/pi/systemd/mello-librespot.service.template"
+
+  if [ -f "$TEMPLATE" ]; then
+    local name
+    name=$(basename "$TEMPLATE" .template)
+    sed -e "s|__USER__|$MELLO_USER|g" \
+        -e "s|__HOME__|$MELLO_HOME|g" \
+        -e "s|__UID__|$MELLO_UID|g" \
+        "$TEMPLATE" | sudo tee "/etc/systemd/system/$name" > /dev/null
+    log "Rendered $name without PartOf=mello-native.service"
+  elif [ -f "$SERVICE" ]; then
+    sudo sed -i '/^PartOf=mello-native\.service$/d' "$SERVICE"
+    log "Removed PartOf=mello-native.service from installed mello-librespot.service"
+  else
+    log "mello-librespot service not found, skipping"
+    return 0
+  fi
+
+  sudo systemctl daemon-reload
+  log "systemd reloaded after librespot dependency update"
+}
+
+# ============================================
 # Run all migrations
 # ============================================
 run_migration "001" "Bluetooth audio via PipeWire"
@@ -742,3 +773,4 @@ run_migration "010" "Remove go-librespot audio_device (use default sink)"
 run_migration "011" "Converge Raspberry Pi Touch Display 2 boot config"
 run_migration "012" "Reboot after display boot config changes"
 run_migration "013" "Disable Spotify suggested autoplay"
+run_migration "014" "Keep librespot independent of UI sleep/restarts"

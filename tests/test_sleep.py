@@ -31,6 +31,21 @@ def test_sleep_allowed_when_enabled(monkeypatch):
     assert mgr.is_sleeping is True
 
 
+def test_sleep_keeps_wifi_awake(monkeypatch):
+    wifi_power_save = MagicMock()
+    monkeypatch.setattr(SleepManager, '_detect_backlight', lambda self: None)
+    monkeypatch.setattr(SleepManager, '_detect_drm_connector', lambda self: None)
+    monkeypatch.setattr(SleepManager, '_set_low_power_cpu', lambda self, low: None)
+    monkeypatch.setattr(SleepManager, '_set_led', lambda self, on: None)
+    monkeypatch.setattr(SleepManager, '_set_wifi_power_save', wifi_power_save)
+
+    mgr = SleepManager()
+    mgr.enter_sleep()
+    mgr.wake_up()
+
+    wifi_power_save.assert_not_called()
+
+
 def test_sleep_blocked_when_disabled(monkeypatch):
     mgr = make_sleep_manager(monkeypatch)
     mgr.last_activity = 100

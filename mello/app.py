@@ -283,6 +283,7 @@ class Mello:
         self.temp_item: Optional[CatalogItem] = None
         self._temp_item_lock = threading.Lock()
         self.delete_mode_id: Optional[str] = None
+        self._delete_button_rect: Optional[tuple] = None
         self._saving = False
         self._deleting = False
         
@@ -1352,16 +1353,17 @@ class Mello:
         carousel_x_max = CAROUSEL_X + COVER_SIZE + CAROUSEL_TOUCH_MARGIN
         
         logger.debug(f'Touch down: pos={pos}, carousel_x_range={carousel_x_min}-{carousel_x_max}')
+
+        # Delete mode is modal: the next tap confirms delete or cancels it.
+        # It must never fall through to cover/play handling.
+        if self.delete_mode_id:
+            self._handle_delete_mode_tap(pos)
+            return
         
         # Check button clicks
         if self._check_button_click(pos):
             logger.debug('Touch down: button click')
             return
-        
-        # Cancel delete mode
-        if self.delete_mode_id:
-            self.delete_mode_id = None
-            self.renderer.invalidate()
         
         # Carousel swipes - within carousel X zone, full Y range
         if carousel_x_min <= x <= carousel_x_max:
@@ -1395,6 +1397,83 @@ class Mello:
                 return True
 
         return False
+
+    @staticmethod
+    def _point_in_rect(pos, rect: Optional[tuple]) -> bool:
+        """Return True if pos is inside a tuple/pygame-style rect."""
+        if not rect:
+            return False
+        x, y = pos
+        bx, by, bw, bh = rect
+        return bx <= x <= bx + bw and by <= y <= by + bh
+
+    def _delete_fallback_rect(self) -> tuple:
+        """Expected delete overlay hit rect for the centered cover.
+
+        Mirrors Renderer._draw_overlay_button geometry. This is only a
+        safety net for the rare case where the visual delete mode is active
+        but the renderer hit rect was not captured yet.
+        """
+        btn_size, margin, touch_padding = 100, 16, 60
+        cover_x = CAROUSEL_X
+        cover_y = CAROUSEL_CENTER_Y - COVER_SIZE // 2
+        btn_x = cover_x + margin
+        btn_y = cover_y + COVER_SIZE - btn_size - margin
+        hit_x = btn_x - touch_padding
+        hit_y = btn_y - touch_padding
+        hit_size = btn_size + touch_padding * 2
+        return (hit_x, hit_y, hit_size, hit_size)
+
+    def _focused_delete_item(self) -> Optional[CatalogItem]:
+        """Return focused catalog item while delete mode is active."""
+        items = self.display_items
+        if not items or self.selected_index >= len(items):
+            return None
+        item = items[self.selected_index]
+        if item.is_temp or item.id != self.delete_mode_id:
+            return None
+        return item
+
+    def _handle_delete_mode_tap(self, pos):
+        """Confirm or cancel delete mode, consuming the tap either way."""
+        item = self._focused_delete_item()
+        renderer_rect = self.renderer.delete_button_rect
+        remembered_rect = self._delete_button_rect
+        fallback_rect = self._delete_fallback_rect()
+        active_rect = renderer_rect or remembered_rect
+
+        if item is None:
+            logger.info(
+                'Delete confirm hit-test | result=stale_item '
+                f'| pos={pos} | rect={active_rect} | fallback={fallback_rect} '
+                f'| delete_mode_id={self.delete_mode_id}'
+            )
+            self.delete_mode_id = None
+            self._delete_button_rect = None
+            self.renderer.invalidate()
+            return
+
+        if active_rect is None:
+            result = 'confirm' if self._point_in_rect(pos, fallback_rect) else 'rect_missing'
+            hit = result == 'confirm'
+        else:
+            hit = self._point_in_rect(pos, active_rect) or self._point_in_rect(pos, fallback_rect)
+            result = 'confirm' if hit else 'miss_cancel'
+
+        logger.info(
+            'Delete confirm hit-test | '
+            f'result={result} | pos={pos} | rect={active_rect} | fallback={fallback_rect} '
+            f'| focused="{item.name}" | focused_id={item.id} | focused_uri={item.uri[:50]} '
+            f'| delete_mode_id={self.delete_mode_id}'
+        )
+
+        if hit:
+            self._delete_current_item()
+            return
+
+        self.delete_mode_id = None
+        self._delete_button_rect = None
+        self.renderer.invalidate()
     
     def _handle_touch_up(self, pos):
         """Handle touch/mouse up."""
@@ -1779,7 +1858,15 @@ class Mello:
     
     def _delete_current_item(self):
         """Delete the current item from catalog."""
-        if not self.delete_mode_id or self._deleting:
+        logger.info(
+            f'Delete requested | delete_mode_id={self.delete_mode_id} '
+            f'| deleting={self._deleting}'
+        )
+        if not self.delete_mode_id:
+            logger.warning('Delete ignored | reason=no_delete_mode_id')
+            return
+        if self._deleting:
+            logger.warning('Delete ignored | reason=already_deleting')
             return
         self._deleting = True
         
@@ -1789,7 +1876,9 @@ class Mello:
             
             item = next((i for i in self.catalog_manager.items if i.id == item_id), None)
             if item:
-                logger.info(f'Deleting: {item.name}')
+                logger.info(f'Deleting: {item.name} | id={item.id} | uri={item.uri[:50]}')
+            else:
+                logger.warning(f'Delete target not found in catalog | id={item_id}')
             
             success = self.catalog_manager.delete_item(item_id)
             
@@ -1806,10 +1895,20 @@ class Mello:
                     self.carousel.set_target(new_index)
                     
                     new_item = self.display_items[new_index]
+                    logger.info(
+                        f'Delete success | removed_id={item_id} | '
+                        f'new_index={new_index} | new_item="{new_item.name}" | '
+                        f'new_uri={new_item.uri[:50]}'
+                    )
                     if not new_item.is_temp:
                         self._play_item(new_item.uri)
+                else:
+                    logger.info(f'Delete success | removed_id={item_id} | catalog empty')
+            else:
+                logger.warning(f'Delete failed | id={item_id}')
             
             self.delete_mode_id = None
+            self._delete_button_rect = None
             self.renderer.invalidate()
         finally:
             self._deleting = False
@@ -1826,6 +1925,7 @@ class Mello:
         
         logger.info(f'Delete mode: {item.name}')
         self.delete_mode_id = item.id
+        self._delete_button_rect = None
         self.renderer.invalidate()
     
     def _save_progress_on_shutdown(self):
@@ -2312,4 +2412,9 @@ class Mello:
             reset_confirm_pending=self.setup_menu._reset_confirm_pending,
             has_network=self._get_cached_network_status(),
         )
-        return self.renderer.draw(ctx)
+        dirty_rects = self.renderer.draw(ctx)
+        if self.delete_mode_id and self.renderer.delete_button_rect:
+            self._delete_button_rect = self.renderer.delete_button_rect
+        elif not self.delete_mode_id:
+            self._delete_button_rect = None
+        return dirty_rects
