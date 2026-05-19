@@ -154,8 +154,7 @@ class SleepManager:
         self._set_display(False)
         self._set_low_power_cpu(True)
         self._set_led(False)
-        self._set_wifi_power_save(True)
-        logger.info(f'Sleep mode active (display off, CPU low, LED off, WiFi ps) diag_after={self._display_diag()}')
+        logger.info(f'Sleep mode active (display off, CPU low, LED off, WiFi kept awake) diag_after={self._display_diag()}')
     
     def wake_up(self, reason: str = 'activity'):
         """Wake from sleep mode - restore full power."""
@@ -167,7 +166,6 @@ class SleepManager:
         logger.info(f'Waking up... reason={reason}, slept_for={slept_text}, diag_before={self._display_diag()}')
         self.is_sleeping = False
         self.last_activity = time.time()
-        self._set_wifi_power_save(False)
         self._set_led(True)
         self._set_low_power_cpu(False)
         self._set_display(True)

@@ -2,7 +2,6 @@
 Description=Mello go-librespot Spotify Connect
 After=network.target
 Wants=network.target
-PartOf=mello-native.service
 
 [Service]
 Type=simple
