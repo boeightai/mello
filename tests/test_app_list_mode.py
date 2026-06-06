@@ -188,3 +188,33 @@ def test_list_scroll_offset_is_clamped():
     app._set_list_scroll_offset(10_000)
 
     assert app._playlist_scroll_offset == (20 - 1) * (82 + 10) - 560
+
+
+def test_spotify_library_refresh_skips_unreadable_selected_playlist():
+    app = _make_app('tracks')
+    unreadable = _playlist('blocked', 'Blocked')
+    readable = _playlist('good', 'Good')
+    app._selected_playlist_id = unreadable.id
+    app.spotify_client = SimpleNamespace(token=object())
+
+    def refresh_tracks(playlist_id):
+        if playlist_id == unreadable.id:
+            raise RuntimeError('forbidden')
+        return [_track()]
+
+    app.spotify_library = SimpleNamespace(
+        playlists=[unreadable, readable],
+        tracks_for_playlist=lambda playlist_id: [],
+        refresh_playlist_tracks=MagicMock(side_effect=refresh_tracks),
+        refresh_playlists=MagicMock(return_value=[unreadable, readable]),
+    )
+
+    with patch('mello.app.run_async') as mock_run:
+        mock_run.side_effect = lambda fn, *args: fn(*args)
+        app._refresh_spotify_library()
+
+    assert app._selected_playlist_id == readable.id
+    assert app.spotify_library.refresh_playlist_tracks.call_args_list[0].args == (unreadable.id,)
+    assert app.spotify_library.refresh_playlist_tracks.call_args_list[1].args == (readable.id,)
+    app._show_toast.assert_not_called()
+    app.renderer.invalidate.assert_called()

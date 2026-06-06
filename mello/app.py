@@ -524,8 +524,24 @@ class Mello:
                 playlists = self.spotify_library.refresh_playlists()
                 playlist = self._selected_spotify_playlist() or (playlists[0] if playlists else None)
                 if playlist:
-                    self._selected_playlist_id = playlist.id
-                    self.spotify_library.refresh_playlist_tracks(playlist.id)
+                    candidates = [playlist] + [
+                        candidate for candidate in playlists if candidate.id != playlist.id
+                    ]
+                    last_error = None
+                    for candidate in candidates:
+                        try:
+                            self.spotify_library.refresh_playlist_tracks(candidate.id)
+                            self._selected_playlist_id = candidate.id
+                            break
+                        except Exception as e:
+                            last_error = e
+                            logger.warning(
+                                'Spotify playlist tracks unavailable | '
+                                f'playlist={candidate.id} error={e}'
+                            )
+                    else:
+                        if last_error:
+                            raise last_error
                 logger.info(f'Spotify library refreshed | playlists={len(playlists)}')
                 self.renderer.invalidate()
             except Exception as e:
