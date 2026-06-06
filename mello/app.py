@@ -351,6 +351,7 @@ class Mello:
         self._last_snap_pause_at: float = 0.0
         self._hard_stopped: bool = False
         self._hard_stop_since: float = 0.0
+        self._last_hard_stop_sync_pause_at: float = 0.0
         self._global_touch_active: Optional[str] = None
         self._global_stop_verify_generation: int = 0
         self._last_restore_handled_at: float = 0.0
@@ -2515,8 +2516,11 @@ class Mello:
             self._pending_external_focus_uri = None
             if self.now_playing.playing:
                 self.volume.mute()
-                run_async(self.api.pause)
-                logger.warning('SYNC blocked | reason=hard_stopped | remote_playing_pause_sent')
+                now = time.time()
+                if now - self._last_hard_stop_sync_pause_at > 2.0:
+                    self._last_hard_stop_sync_pause_at = now
+                    run_async(self.api.pause)
+                    logger.warning('SYNC blocked | reason=hard_stopped | remote_playing_pause_sent')
             return
 
         context_uri = self.now_playing.context_uri
