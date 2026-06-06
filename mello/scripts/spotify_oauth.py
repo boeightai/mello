@@ -2,9 +2,9 @@
 Spotify OAuth setup helper for Mello.
 
 Usage:
-    python -m mello.scripts.spotify_oauth auth-url
-    python -m mello.scripts.spotify_oauth exchange --redirect-url "http://127.0.0.1:8765/callback?code=..."
-    python -m mello.scripts.spotify_oauth refresh
+    venv/bin/python -m mello.scripts.spotify_oauth auth-url
+    venv/bin/python -m mello.scripts.spotify_oauth exchange --redirect-url "http://127.0.0.1:8765/callback?code=..."
+    venv/bin/python -m mello.scripts.spotify_oauth refresh
 
 Set SPOTIFY_CLIENT_ID in .env or the shell before running.
 """
