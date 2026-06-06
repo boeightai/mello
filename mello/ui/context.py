@@ -23,6 +23,8 @@ class RenderContext:
     pressed_button: Optional[str]
     is_loading: bool
     is_playing: bool  # What to show for play/pause button
+    hard_stopped: bool = False
+    global_pressed_button: Optional[str] = None
     pending_focus_uri: Optional[str] = None
     requested_focus_uri: Optional[str] = None
     play_in_progress: bool = False
@@ -47,4 +49,3 @@ class RenderContext:
     update_available: bool = False
     update_running: bool = False
     has_network: bool = True
-

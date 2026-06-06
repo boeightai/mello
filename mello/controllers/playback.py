@@ -58,6 +58,8 @@ class PlaybackController:
         self._last_toast_message: Optional[str] = None
         self._transport_next_allowed = {'pause': 0.0, 'resume': 0.0}
         self._pause_override_until: float = 0.0
+        self._hard_stopped: bool = False
+        self._hard_stop_since: float = 0.0
 
         # Play request queuing (non-blocking, latest wins).
         # _play_generation is an incrementing counter; each _execute_play
@@ -96,6 +98,9 @@ class PlaybackController:
 
     def toggle_play(self, items: List[CatalogItem], selected_index: int, now_playing: NowPlaying):
         """Toggle play/pause based on current state."""
+        if self._hard_stopped:
+            logger.info('toggle_play ignored | reason=hard_stopped')
+            return
         if not items:
             return
 
@@ -122,6 +127,9 @@ class PlaybackController:
 
     def play_item(self, uri: str, from_beginning: bool = False, epoch: int = 0):
         """Queue a play request (non-blocking). Only the latest request runs."""
+        if self._hard_stopped:
+            logger.info(f'play_item ignored | reason=hard_stopped | uri={uri[:50]}')
+            return
         self.last_user_play_time = time.time()
         self.last_user_play_uri = uri
         self._clear_pause_override('new_play_intent')
@@ -144,6 +152,12 @@ class PlaybackController:
 
     def retry_failed(self):
         """Retry a previously failed play request (call on reconnect)."""
+        if self._hard_stopped:
+            if self._failed_play:
+                logger.info('Dropping failed retry | reason=hard_stopped')
+            self._failed_play = None
+            self._failed_play_since = 0.0
+            return
         failed = self._failed_play
         if not failed:
             return
@@ -184,6 +198,37 @@ class PlaybackController:
         self._failed_play = None
         self._failed_play_since = 0.0
         self.play_state.clear()
+
+    @property
+    def hard_stopped(self) -> bool:
+        """True after an absolute user stop until explicit play intent clears it."""
+        return self._hard_stopped
+
+    def absolute_stop(self, reason: str = 'user_stop', hold_s: float = 60.0):
+        """Enter hard-stop state and silence/cancel playback immediately."""
+        self._hard_stopped = True
+        self._hard_stop_since = time.time()
+        self.stop_all()
+        self.volume.mute()
+        self._set_pause_override(reason, hold_s=hold_s)
+        self.play_state.set_pending('pause')
+        self.play_state.stop_loading()
+        self._on_invalidate()
+        logger.warning(
+            f'absolute_stop | reason={reason} | hold_s={hold_s:.1f} | local_mute=True'
+        )
+        self._send_transport('pause')
+
+    def clear_hard_stop(self, reason: str):
+        """Clear hard-stop state after explicit positive play intent."""
+        if self._hard_stopped:
+            logger.info(
+                f'hard_stop_cleared | reason={reason} | '
+                f'age={time.time() - self._hard_stop_since:.1f}s'
+            )
+        self._hard_stopped = False
+        self._hard_stop_since = 0.0
+        self._clear_pause_override(reason)
 
     def check_autoplay(self, now_playing: NowPlaying):
         """Detect autoplay and clear progress when context finishes naturally."""
@@ -335,7 +380,7 @@ class PlaybackController:
             max_attempts = 2
             retry_delay = 3
             for attempt in range(1, max_attempts + 1):
-                if _stale():
+                if _stale() or self._hard_stopped:
                     logger.info(f'  Play cancelled (gen={my_gen}), aborting')
                     return
                 result = self.api.play(uri, skip_to_uri=skip_to_uri, paused=need_seek)
@@ -348,12 +393,12 @@ class PlaybackController:
                 if attempt < max_attempts:
                     self.play_state.start_loading()
                     for _ in range(8):
-                        if _stale():
+                        if _stale() or self._hard_stopped:
                             logger.info(f'  Play cancelled during retry wait (gen={my_gen})')
                             return
                         time.sleep(0.5)
 
-            if _stale():
+            if _stale() or self._hard_stopped:
                 return
 
             success = result is True
@@ -399,6 +444,12 @@ class PlaybackController:
                 logger.info('  Resumed after seek')
 
             if success:
+                if self._hard_stopped:
+                    logger.info(
+                        f'Play success ignored | reason=hard_stopped | epoch={epoch} | uri={uri[:50]}'
+                    )
+                    self.play_state.stop_loading()
+                    return
                 if not self._is_request_current(epoch, uri):
                     logger.info(f'Play success ignored (stale epoch={epoch}): {uri[:50]}')
                     self.play_state.stop_loading()
@@ -436,9 +487,9 @@ class PlaybackController:
                 if should_execute_pending and not self._is_request_current(pending[2], pending[0]):
                     logger.debug(f'Dropping stale queued request: {pending[0][:50]}')
                     should_execute_pending = False
-                if should_execute_pending and self.pause_intent_active:
+                if should_execute_pending and (self.pause_intent_active or self._hard_stopped):
                     logger.info(
-                        f'stale_play_dropped | reason=pause_intent_active_queued | uri={pending[0][:50]}'
+                        f'stale_play_dropped | reason=pause_or_hard_stop_queued | uri={pending[0][:50]}'
                     )
                     should_execute_pending = False
                 if should_execute_pending:
@@ -457,6 +508,9 @@ class PlaybackController:
 
     def _send_transport(self, command: str):
         """Send pause/resume with small cooldown to avoid burst spam."""
+        if command == 'resume' and self._hard_stopped:
+            logger.info('resume suppressed | reason=hard_stopped')
+            return
         now = time.time()
         next_allowed = self._transport_next_allowed.get(command, 0.0)
         if now < next_allowed:
@@ -487,6 +541,9 @@ class PlaybackController:
 
     def _clear_pause_override(self, reason: str):
         """Clear pause override after explicit positive play intent."""
+        if self._hard_stopped:
+            logger.info(f'pause_intent_clear suppressed | reason=hard_stopped | requested_by={reason}')
+            return
         if self._pause_override_until > 0:
             logger.info(f'pause_intent_off | reason={reason}')
         self._pause_override_until = 0.0

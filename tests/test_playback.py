@@ -576,3 +576,35 @@ class TestRetryBackoffGuards:
 
         calls = [c.args[0] for c in api.play.call_args_list]
         assert calls == ['spotify:album:first']
+
+
+class TestHardStopGuards:
+    """Absolute stop should silence and block every playback restart path."""
+
+    @patch('mello.controllers.playback.run_async')
+    def test_absolute_stop_blocks_play_and_retry(self, mock_run_async):
+        pc, api, _, volume = _make_controller()
+        pc._failed_play = ('spotify:album:retry', False, 0)
+        pc._failed_play_since = time.time()
+
+        pc.absolute_stop('test_stop')
+        pc.play_item('spotify:album:new')
+        pc.retry_failed()
+
+        assert pc.hard_stopped is True
+        volume.mute.assert_called_once()
+        api.play.assert_not_called()
+        assert pc._failed_play is None
+        assert pc.play_state.should_show_loading is False
+
+    @patch('mello.controllers.playback.run_async')
+    def test_clear_hard_stop_allows_explicit_play(self, mock_run_async):
+        pc, api, _, _ = _make_controller()
+        mock_run_async.side_effect = lambda fn, *a: fn(*a)
+
+        pc.absolute_stop('test_stop')
+        pc.clear_hard_stop('play_tap')
+        pc.play_item('spotify:album:new')
+
+        assert pc.hard_stopped is False
+        api.play.assert_called_once_with('spotify:album:new', skip_to_uri=None, paused=None)

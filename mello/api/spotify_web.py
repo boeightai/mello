@@ -335,6 +335,12 @@ class SpotifyWebAPI:
         """Return the current playback payload, or None when Spotify returns 204."""
         return self._request("GET", "/me/player")
 
+    def pause_playback(self, device_id: Optional[str] = None) -> bool:
+        """Pause Spotify playback, optionally targeting a Connect device."""
+        params = {"device_id": device_id} if device_id else None
+        self._request("PUT", "/me/player/pause", params=params)
+        return True
+
     def available_devices(self) -> List[dict]:
         """Return available Spotify Connect devices."""
         data = self._request("GET", "/me/player/devices")

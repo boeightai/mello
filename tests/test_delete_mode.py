@@ -29,7 +29,7 @@ def _item(item_id='1') -> CatalogItem:
     )
 
 
-def _make_app(rect=(10, 10, 50, 50)) -> Mello:
+def _make_app(rect=(220, 10, 50, 50)) -> Mello:
     item = _item()
     app = Mello.__new__(Mello)
     app.catalog_manager = SimpleNamespace(items=[item])
@@ -48,15 +48,19 @@ def _make_app(rect=(10, 10, 50, 50)) -> Mello:
     app.touch = SimpleNamespace(on_down=MagicMock())
     app.user_interacting = False
     app._user_activated_playback = False
+    app._hard_stopped = False
+    app._global_touch_active = None
+    app._pressed_button = None
+    app._pressed_time = 0
     app._handle_button_tap = MagicMock()
     app._delete_current_item = MagicMock()
     return app
 
 
 def test_delete_mode_confirm_calls_delete():
-    app = _make_app(rect=(10, 10, 50, 50))
+    app = _make_app(rect=(220, 10, 50, 50))
 
-    app._handle_touch_down((20, 20))
+    app._handle_touch_down((230, 20))
 
     app._delete_current_item.assert_called_once()
     app._handle_button_tap.assert_not_called()
@@ -64,7 +68,7 @@ def test_delete_mode_confirm_calls_delete():
 
 
 def test_delete_mode_miss_cancels_without_play_or_swipe():
-    app = _make_app(rect=(10, 10, 50, 50))
+    app = _make_app(rect=(220, 10, 50, 50))
 
     app._handle_touch_down((200, 200))
 
@@ -94,7 +98,7 @@ def test_delete_mode_missing_rect_miss_cancels_without_play_or_swipe():
     app.renderer.delete_button_rect = None
     app._delete_button_rect = None
 
-    app._handle_touch_down((0, 0))
+    app._handle_touch_down((700, 0))
 
     app._delete_current_item.assert_not_called()
     app._handle_button_tap.assert_not_called()

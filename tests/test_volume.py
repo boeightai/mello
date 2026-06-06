@@ -108,6 +108,16 @@ class TestVolumeToggle:
         args = mock_run_async.call_args[0]
         assert args[0] == set_system_volume
 
+    @patch('mello.controllers.volume.run_async')
+    def test_step_increases_and_decreases_without_wrapping(self, mock_run_async):
+        vc = _make_controller()
+        vc.index = len(DEFAULT_VOLUME_LEVELS) - 1
+        assert vc.increase() is False
+        assert vc.index == len(DEFAULT_VOLUME_LEVELS) - 1
+
+        assert vc.decrease() is True
+        assert vc.index == len(DEFAULT_VOLUME_LEVELS) - 2
+
 
 class TestEnsureSpotifyAt100:
     """Tests for first-play volume initialization."""

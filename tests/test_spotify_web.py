@@ -324,3 +324,17 @@ def test_api_error_includes_response_text():
 
     with pytest.raises(SpotifyWebAPIError, match="unauthorized"):
         client.available_devices()
+
+
+def test_pause_playback_targets_device():
+    session = MagicMock()
+    session.request.return_value = FakeResponse(status_code=204)
+    client = make_client(session=session)
+
+    assert client.pause_playback(device_id="mello-device") is True
+    session.request.assert_called_once()
+    assert session.request.call_args.args[:2] == (
+        "PUT",
+        "https://api.spotify.com/v1/me/player/pause",
+    )
+    assert session.request.call_args.kwargs["params"] == {"device_id": "mello-device"}

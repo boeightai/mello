@@ -349,6 +349,10 @@ class Mello:
         self._last_play_commit_uri: Optional[str] = None
         self._last_play_commit_at: float = 0.0
         self._last_snap_pause_at: float = 0.0
+        self._hard_stopped: bool = False
+        self._hard_stop_since: float = 0.0
+        self._global_touch_active: Optional[str] = None
+        self._global_stop_verify_generation: int = 0
         self._last_restore_handled_at: float = 0.0
         self._restore_dedup_count: int = 0
         self._repeat_context_uri: Optional[str] = None
@@ -677,6 +681,8 @@ class Mello:
         if not track.is_playable:
             self._show_toast('Track unavailable')
             return
+        if self._is_hard_stopped():
+            self._clear_hard_stop('track_list_tap')
         self._user_activated_playback = True
         self._clear_manual_pause_lock('track_list_tap')
         self.volume.unmute()
@@ -684,6 +690,8 @@ class Mello:
         self.renderer.invalidate()
 
         def _play():
+            if self._is_hard_stopped():
+                return
             device_id = self._spotify_device_id()
             if self.spotify_client and self.spotify_client.token and device_id:
                 try:
@@ -693,6 +701,11 @@ class Mello:
                         track_uri=track.uri,
                         device_id=device_id,
                     )
+                    if self._is_hard_stopped():
+                        logger.warning(
+                            f'Spotify track play success ignored | reason=hard_stopped | track={track.uri[:40]}'
+                        )
+                        return
                     self._last_play_commit_uri = playlist.uri
                     self._last_play_commit_at = time.time()
                     return
@@ -700,6 +713,8 @@ class Mello:
                     logger.warning(f'Spotify Web API track play failed, falling back: {e}')
 
             result = self.api.play(playlist.uri, skip_to_uri=track.uri)
+            if self._is_hard_stopped():
+                return
             if result is None:
                 self._show_toast('Connect Spotify to Mello')
             elif not result:
@@ -712,6 +727,10 @@ class Mello:
         self._toast_message = message
         self._toast_time = time.time()
         self.renderer.invalidate()
+
+    def _is_hard_stopped(self) -> bool:
+        """True when the app is holding the user-requested absolute stop."""
+        return bool(getattr(self, '_hard_stopped', False) or getattr(self.playback, 'hard_stopped', False))
 
     def _bump_focus_epoch(self, reason: str):
         """Increment focus epoch so stale play responses can be ignored."""
@@ -730,6 +749,8 @@ class Mello:
 
     def _is_play_request_current(self, epoch: int, uri: str) -> bool:
         """True when play response still matches latest focus intent."""
+        if self._is_hard_stopped():
+            return False
         return epoch == self._focus_epoch and uri == self._current_focused_uri()
 
     def _has_active_user_focus_intent(self) -> bool:
@@ -814,6 +835,9 @@ class Mello:
 
     def _on_play_committed(self, uri: str, epoch: int):
         """Called by PlaybackController when a play request is accepted."""
+        if self._is_hard_stopped():
+            logger.warning(f'Play commit ignored | reason=hard_stopped | uri={uri[:40]} epoch={epoch}')
+            return
         self._user_driving = False
         # Keep requested marker until status confirms focused context is active.
         # This prevents duplicate re-requests while /status lags behind.
@@ -1608,7 +1632,9 @@ class Mello:
             elif event.type == pygame.MOUSEBUTTONUP:
                 logger.debug(f'Event: MOUSEBUTTONUP at {event.pos}')
                 if not self.sleep_manager.is_sleeping:
-                    if self.setup_menu.is_open and self._menu_touch_start is not None:
+                    if self._handle_global_control_up(event.pos):
+                        pass
+                    elif self.setup_menu.is_open and self._menu_touch_start is not None:
                         if not self._menu_touch_scrolled:
                             # Flash pressed state on close/back button
                             close_rect = self.renderer.menu_button_rects.get('close')
@@ -1654,6 +1680,8 @@ class Mello:
     
     def _handle_touch_down(self, pos):
         """Handle touch/mouse down."""
+        if self._handle_global_control_down(pos):
+            return
         self._user_activated_playback = True
         # Menu intercept — track touch start for scroll vs tap detection
         if self.setup_menu.is_open:
@@ -1761,6 +1789,161 @@ class Mello:
                     if playlist:
                         self._play_spotify_track(playlist, tracks[index])
                     return
+
+    def _global_control_hit(self, pos) -> Optional[str]:
+        """Return global control hit name. The full rail consumes touches."""
+        rects = (
+            self.renderer.global_control_rects()
+            if hasattr(self.renderer, 'global_control_rects')
+            else {}
+        )
+        stop_rect = rects.get('global_stop_play') or getattr(self.renderer, 'global_stop_play_rect', None)
+        vol_down_rect = rects.get('global_volume_down') or getattr(self.renderer, 'global_volume_down_rect', None)
+        vol_up_rect = rects.get('global_volume_up') or getattr(self.renderer, 'global_volume_up_rect', None)
+
+        if self._point_in_rect(pos, stop_rect):
+            return 'global_stop_play'
+        if self._point_in_rect(pos, vol_down_rect):
+            return 'global_volume_down'
+        if self._point_in_rect(pos, vol_up_rect):
+            return 'global_volume_up'
+        if pos[0] <= 170:
+            return 'global_rail'
+        return None
+
+    def _handle_global_control_down(self, pos) -> bool:
+        """Capture global rail touches before any screen-specific routing."""
+        hit = self._global_control_hit(pos)
+        if not hit:
+            return False
+        self._global_touch_active = hit
+        self._pressed_button = hit
+        self._pressed_time = time.time()
+        self.renderer.invalidate()
+        return True
+
+    def _handle_global_control_up(self, pos) -> bool:
+        """Resolve global rail touch-up and consume it completely."""
+        active = self._global_touch_active
+        if not active:
+            return False
+        self._global_touch_active = None
+
+        hit = self._global_control_hit(pos)
+        if active == 'global_rail':
+            self._pressed_button = None
+            self.renderer.invalidate()
+            return True
+        if hit != active:
+            self._pressed_button = None
+            self.renderer.invalidate()
+            return True
+
+        now = time.time()
+        if now - self._last_action_time < ACTION_DEBOUNCE:
+            self._pressed_button = None
+            self.renderer.invalidate()
+            return True
+        self._last_action_time = now
+
+        if active == 'global_stop_play':
+            self._handle_global_stop_play()
+        elif active == 'global_volume_down':
+            self._adjust_global_volume(-1)
+        elif active == 'global_volume_up':
+            self._adjust_global_volume(1)
+
+        self._pressed_button = None
+        self.renderer.invalidate()
+        return True
+
+    def _handle_global_stop_play(self):
+        """One-tap global STOP/PLAY action."""
+        if self._is_hard_stopped() or not (self.now_playing.playing or self.playback.has_pending_play):
+            self._toggle_play()
+            return
+        self._absolute_stop('global_stop_button')
+
+    def _adjust_global_volume(self, delta: int):
+        """Adjust volume from the global safety rail without starting playback."""
+        changed = self.volume.increase() if delta > 0 else self.volume.decrease()
+        if changed and self._bt_audio_active:
+            self.bluetooth.set_volume(self.volume.bt_level)
+
+    def _absolute_stop(self, reason: str):
+        """Absolute user stop: silence locally, cancel app intent, pause remotely, verify."""
+        self._hard_stopped = True
+        self._hard_stop_since = time.time()
+        self._global_stop_verify_generation += 1
+        verify_generation = self._global_stop_verify_generation
+        self._set_manual_pause_lock(reason)
+        self._user_activated_playback = False
+        self._user_driving = False
+        self._user_driving_since = 0.0
+        self.play_timer.cancel()
+        self._reset_pending_focus('absolute_stop')
+        self._pending_external_focus_uri = None
+        self._requested_focus_epoch = None
+        self._requested_focus_uri = None
+        self._requested_focus_since = 0.0
+        self.playback.last_context_uri = None
+        self.playback.absolute_stop(reason)
+        self._show_toast('Stopped')
+        logger.error(f'ABSOLUTE_STOP | reason={reason} | generation={verify_generation}')
+        run_async(self._verify_absolute_stop_async, verify_generation)
+
+    def _clear_hard_stop(self, reason: str):
+        """Clear hard stop only after explicit play or explicit track choice."""
+        if self._hard_stopped:
+            logger.info(
+                f'hard_stop_cleared | reason={reason} | age={time.time() - self._hard_stop_since:.1f}s'
+            )
+        self._hard_stopped = False
+        self._hard_stop_since = 0.0
+        if hasattr(self.playback, 'clear_hard_stop'):
+            self.playback.clear_hard_stop(reason)
+        self._clear_manual_pause_lock(reason)
+
+    def _verify_absolute_stop_async(self, generation: int):
+        """Pause every known playback path, then stop librespot if verification fails."""
+        device_id = self._spotify_device_id()
+        if self.spotify_client and self.spotify_client.token:
+            try:
+                self.spotify_client.pause_playback(device_id=device_id)
+                logger.warning(f'ABSOLUTE_STOP spotify_pause_sent | device_id={device_id or "none"}')
+            except Exception as e:
+                logger.warning(f'ABSOLUTE_STOP spotify_pause_failed | error={e}')
+        try:
+            self.api.pause()
+            logger.warning('ABSOLUTE_STOP local_pause_sent')
+        except Exception as e:
+            logger.warning(f'ABSOLUTE_STOP local_pause_failed | error={e}')
+
+        time.sleep(3.0)
+        if generation != self._global_stop_verify_generation or not self._is_hard_stopped():
+            return
+
+        still_playing = bool(self.now_playing.playing)
+        try:
+            status = self.api.status()
+            if isinstance(status, dict):
+                if 'playing' in status:
+                    still_playing = still_playing or bool(status.get('playing'))
+                else:
+                    still_playing = still_playing or not bool(status.get('paused') or status.get('stopped'))
+        except Exception as e:
+            logger.warning(f'ABSOLUTE_STOP verify_status_failed | error={e}')
+
+        if still_playing:
+            logger.error('ABSOLUTE_STOP escalation | stopping mello-librespot')
+            try:
+                subprocess.run(
+                    ['systemctl', 'stop', 'mello-librespot'],
+                    check=False,
+                    timeout=8,
+                )
+            except Exception as e:
+                logger.error(f'ABSOLUTE_STOP service_stop_failed | error={e}')
 
     def _delete_fallback_rect(self) -> tuple:
         """Expected delete overlay hit rect for the centered cover.
@@ -1953,7 +2136,8 @@ class Mello:
             self.carousel.set_target(target_index)
             self._bump_focus_epoch(f'snap {old_index}->{target_index}')
             self._reset_pending_focus('snap_focus_changed')
-            self._clear_manual_pause_lock('focus_changed')
+            if not self._is_hard_stopped():
+                self._clear_manual_pause_lock('focus_changed')
 
             self.play_timer.cancel()
             self.playback.stop_all()
@@ -1963,6 +2147,7 @@ class Mello:
             should_pause_remote = (
                 now - self._last_snap_pause_at > 0.4 and
                 (self.now_playing.playing or self.playback.has_pending_play)
+                and not self._is_hard_stopped()
             )
             if should_pause_remote:
                 self._last_snap_pause_at = now
@@ -1999,6 +2184,9 @@ class Mello:
 
     def _skip_track(self, api_fn):
         """Save progress, unmute, mark as user action, then skip prev/next."""
+        if self._is_hard_stopped():
+            logger.info('skip ignored | reason=hard_stopped')
+            return
         self.playback.last_user_play_time = time.time()
         self.playback.save_progress(self.now_playing, force=True)
         self.volume.unmute()
@@ -2014,6 +2202,14 @@ class Mello:
     def _toggle_play(self):
         """Toggle play/pause."""
         self._user_activated_playback = True
+        if self._is_hard_stopped():
+            self._clear_hard_stop('play_tap')
+            items = self.display_items
+            if items and self.selected_index < len(items):
+                item = items[self.selected_index]
+                if not item.is_temp:
+                    self._play_item(item.uri)
+                    return
         if self.mock_mode:
             self._toggle_mock_play()
             return
@@ -2054,6 +2250,9 @@ class Mello:
     
     def _play_item(self, uri: str, from_beginning: bool = False):
         """Queue a play request via the playback controller."""
+        if self._is_hard_stopped():
+            logger.info(f'PLAY suppressed | reason=hard_stopped | uri={uri[:40]}')
+            return
         logger.warning(f'PLAY enqueue | uri={uri[:40]} | epoch={self._focus_epoch} | from_beginning={from_beginning}')
         self._user_driving = True
         self._user_driving_since = time.time()
@@ -2312,6 +2511,14 @@ class Mello:
         if not items:
             return
 
+        if self._is_hard_stopped():
+            self._pending_external_focus_uri = None
+            if self.now_playing.playing:
+                self.volume.mute()
+                run_async(self.api.pause)
+                logger.warning('SYNC blocked | reason=hard_stopped | remote_playing_pause_sent')
+            return
+
         context_uri = self.now_playing.context_uri
         if not context_uri:
             self._pending_external_focus_uri = None
@@ -2386,10 +2593,10 @@ class Mello:
         if self._manual_pause_lock and self._manual_pause_context_uri:
             active_ctx = self.now_playing.context_uri
             if active_ctx and active_ctx != self._manual_pause_context_uri:
-                if self.playback.pause_intent_active:
+                if self.playback.pause_intent_active or self._is_hard_stopped():
                     logger.info(
                         'Manual pause lock retained (active_context_changed) | '
-                        'reason=pause_intent_active'
+                        'reason=pause_intent_or_hard_stop'
                     )
                 else:
                     self._clear_manual_pause_lock('active_context_changed')
@@ -2420,6 +2627,7 @@ class Mello:
             and self._user_activated_playback
             and not self._manual_pause_lock
             and not self.playback.pause_intent_active
+            and not self._is_hard_stopped()
             and self.carousel.settled
             and not self.touch.dragging
             and focused_item is not None
@@ -2615,6 +2823,7 @@ class Mello:
                 and self._user_activated_playback
                 and not self._manual_pause_lock
                 and not self.playback.pause_intent_active
+                and not self._is_hard_stopped()
                 and self.carousel.settled
                 and not self.touch.dragging
             )
@@ -2752,6 +2961,10 @@ class Mello:
             # Hide loader as soon as focused context audio is already playing.
             is_loading=self.playback.play_state.is_loading and not (focused_context_playing or recent_focus_commit),
             is_playing=self.playback.play_state.display_playing(np.playing),
+            hard_stopped=self._is_hard_stopped(),
+            global_pressed_button=(
+                self._pressed_button if self._pressed_button and self._pressed_button.startswith('global_') else None
+            ),
             pending_focus_uri=self._pending_focus_uri,
             requested_focus_uri=self._requested_focus_uri,
             play_in_progress=self.playback.play_in_progress,
@@ -2778,11 +2991,12 @@ class Mello:
             has_network=self._get_cached_network_status(),
         )
         dirty_rects = self.renderer.draw(ctx)
+        self._draw_global_transport_overlay()
         if self.delete_mode_id and self.renderer.delete_button_rect:
             self._delete_button_rect = self.renderer.delete_button_rect
         elif not self.delete_mode_id:
             self._delete_button_rect = None
-        return dirty_rects
+        return None
 
     def _draw_list_mode(self):
         """Draw the family station playlist/track list UI."""
@@ -2797,6 +3011,7 @@ class Mello:
                 show_back=True,
                 show_settings=False,
             )
+            self._draw_global_transport_overlay()
             return None
 
         playlist = self._selected_spotify_playlist()
@@ -2820,4 +3035,33 @@ class Mello:
             scroll_offset=self._track_scroll_offset,
             pressed_index=self._pressed_list_index,
         )
+        self._draw_global_transport_overlay()
         return None
+
+    def _draw_global_transport_overlay(self):
+        """Draw the always-visible transport rail on top of the active screen."""
+        if not hasattr(self.renderer, 'draw_global_transport'):
+            return
+        ctx = RenderContext(
+            items=self.display_items,
+            selected_index=self.selected_index,
+            now_playing=self.now_playing,
+            scroll_x=self.carousel.scroll_x,
+            drag_offset=self.touch.drag_offset,
+            dragging=self.touch.dragging,
+            is_sleeping=self.sleep_manager.is_sleeping,
+            volume_index=self.volume.index,
+            delete_mode_id=self.delete_mode_id,
+            pressed_button=self._pressed_button,
+            is_loading=self.playback.play_state.is_loading,
+            is_playing=self.playback.play_state.display_playing(self.now_playing.playing),
+            hard_stopped=self._is_hard_stopped(),
+            global_pressed_button=(
+                self._pressed_button if self._pressed_button and self._pressed_button.startswith('global_') else None
+            ),
+            toast_message=self._active_toast,
+            menu_state=self.setup_menu.state,
+            volume_levels=self.settings.get_volume_levels(),
+            has_network=self._get_cached_network_status(),
+        )
+        self.renderer.draw_global_transport(ctx)

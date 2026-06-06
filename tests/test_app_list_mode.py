@@ -60,7 +60,13 @@ def _make_app(mode='playlists'):
     app._pressed_list_index = None
     app._spotify_refresh_in_progress = False
     app._last_action_time = 0
+    app._pressed_button = None
+    app._pressed_time = 0
     app._user_activated_playback = False
+    app._hard_stopped = False
+    app._hard_stop_since = 0.0
+    app._global_touch_active = None
+    app._global_stop_verify_generation = 0
     app._manual_pause_lock = False
     app._manual_pause_context_uri = None
     app._now_playing_lock = threading.Lock()
@@ -73,11 +79,14 @@ def _make_app(mode='playlists'):
         refresh_playlists=MagicMock(return_value=[playlist]),
     )
     app.renderer = SimpleNamespace(
-        playlist_row_rects=[(10, 10, 50, 50)],
-        track_row_rects=[(10, 10, 50, 50)],
-        playlist_back_rect=(100, 100, 40, 40),
+        playlist_row_rects=[(220, 10, 50, 50)],
+        track_row_rects=[(220, 10, 50, 50)],
+        playlist_back_rect=(220, 100, 40, 40),
         playlist_settings_rect=None,
-        track_back_rect=(100, 100, 40, 40),
+        track_back_rect=(220, 100, 40, 40),
+        global_stop_play_rect=None,
+        global_volume_down_rect=None,
+        global_volume_up_rect=None,
         draw_playlist_list=MagicMock(),
         draw_track_list=MagicMock(),
         invalidate=MagicMock(),
@@ -93,6 +102,8 @@ def _make_app(mode='playlists'):
     app.volume = SimpleNamespace(unmute=MagicMock())
     app.playback = SimpleNamespace(
         play_state=SimpleNamespace(start_loading=MagicMock()),
+        has_pending_play=False,
+        hard_stopped=False,
     )
     app._show_toast = MagicMock()
     app._handle_button_tap = MagicMock()
@@ -105,8 +116,8 @@ def _make_app(mode='playlists'):
 def test_playlist_row_tap_enters_track_list_without_carousel_fallthrough():
     app = _make_app('playlists')
 
-    app._handle_touch_down((20, 20))
-    app._handle_list_touch_up((20, 20))
+    app._handle_touch_down((230, 20))
+    app._handle_list_touch_up((230, 20))
 
     assert app.ui_mode == 'tracks'
     assert app._selected_playlist_id == 'p1'
@@ -120,8 +131,8 @@ def test_track_row_tap_plays_track_with_local_fallback():
 
     with patch('mello.app.run_async') as mock_run:
         mock_run.side_effect = lambda fn, *args: fn(*args)
-        app._handle_touch_down((20, 20))
-        app._handle_list_touch_up((20, 20))
+        app._handle_touch_down((230, 20))
+        app._handle_list_touch_up((230, 20))
 
     app.volume.unmute.assert_called_once()
     app.playback.play_state.start_loading.assert_called_once()
@@ -133,8 +144,8 @@ def test_track_row_tap_plays_track_with_local_fallback():
 def test_track_back_tap_returns_to_playlist_list():
     app = _make_app('tracks')
 
-    app._handle_touch_down((110, 110))
-    app._handle_list_touch_up((110, 110))
+    app._handle_touch_down((230, 110))
+    app._handle_list_touch_up((230, 110))
 
     assert app.ui_mode == 'playlists'
     app.renderer.invalidate.assert_called()
@@ -164,13 +175,55 @@ def test_list_drag_scrolls_without_row_tap():
     app.renderer._LIST_ROW_GAP = 10
     app.renderer._LIST_ROW_X = 560
 
-    app._handle_touch_down((20, 20))
-    app._handle_list_motion((120, 20))
-    app._handle_list_touch_up((120, 20))
+    app._handle_touch_down((230, 20))
+    app._handle_list_motion((330, 20))
+    app._handle_list_touch_up((330, 20))
 
     assert app._track_scroll_offset == 100
     app.api.play.assert_not_called()
     app.renderer.invalidate.assert_called()
+
+
+def test_global_stop_consumes_touch_before_track_row():
+    app = _make_app('tracks')
+    app.renderer.global_stop_play_rect = (10, 10, 100, 100)
+    app.now_playing.playing = True
+    app._absolute_stop = MagicMock()
+
+    app._handle_touch_down((20, 20))
+    app._handle_global_control_up((20, 20))
+
+    app._absolute_stop.assert_called_once_with('global_stop_button')
+    assert app._list_touch_start is None
+    app.api.play.assert_not_called()
+    app._handle_button_tap.assert_not_called()
+
+
+def test_global_volume_controls_do_not_start_playback():
+    app = _make_app('tracks')
+    app.renderer.global_volume_up_rect = (10, 10, 100, 100)
+    app.volume.increase = MagicMock(return_value=True)
+    app.volume.bt_level = 75
+    app._bt_audio_active = False
+
+    app._handle_touch_down((20, 20))
+    app._handle_global_control_up((20, 20))
+
+    app.volume.increase.assert_called_once()
+    app.api.play.assert_not_called()
+    app._handle_button_tap.assert_not_called()
+
+
+def test_global_rail_background_consumes_hidden_controls():
+    app = _make_app('tracks')
+    app.renderer.global_stop_play_rect = (10, 10, 100, 100)
+
+    app._handle_touch_down((20, 1100))
+    app._handle_global_control_up((20, 1100))
+
+    assert app._list_touch_start is None
+    app.api.play.assert_not_called()
+    app._handle_button_tap.assert_not_called()
 
 
 def test_list_scroll_offset_is_clamped():

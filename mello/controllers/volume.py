@@ -48,8 +48,38 @@ class VolumeController:
 
     def toggle(self):
         """Cycle through volume levels."""
-        self.index = (self.index + 1) % len(self._levels())
-        logger.info(f'Volume: speaker={self.speaker_level}%, bt={self.bt_level}%')
+        levels = self._levels()
+        if not levels:
+            return
+        self.index = (self.index + 1) % len(levels)
+        self._apply_level('toggle')
+
+    def step(self, delta: int) -> bool:
+        """Move volume by delta steps. Returns True if the level changed."""
+        levels = self._levels()
+        if not levels:
+            return False
+        old_index = self.index
+        self.index = max(0, min(self.index + delta, len(levels) - 1))
+        if self.index == old_index:
+            return False
+        self._apply_level('step')
+        return True
+
+    def increase(self) -> bool:
+        """Increase volume one configured step."""
+        return self.step(1)
+
+    def decrease(self) -> bool:
+        """Decrease volume one configured step."""
+        return self.step(-1)
+
+    def _apply_level(self, reason: str):
+        """Apply the current ALSA level without changing mute state."""
+        logger.info(
+            f'Volume {reason}: index={self.index}, '
+            f'speaker={self.speaker_level}%, bt={self.bt_level}%'
+        )
         run_async(set_system_volume, self.speaker_level)
 
     def mute(self):

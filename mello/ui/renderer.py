@@ -26,6 +26,13 @@ from ..config import (
 # Headphone: center_y - (COVER_SIZE + COVER_SPACING) - COVER_SIZE_SMALL//2 + BTN_SIZE//2 ≈ 107
 _HEADPHONE_BTN_Y = CAROUSEL_CENTER_Y - (COVER_SIZE + COVER_SPACING) - COVER_SIZE_SMALL // 2 + BTN_SIZE // 2
 
+GLOBAL_RAIL_W = 170
+GLOBAL_RAIL_PADDING = 12
+GLOBAL_RAIL_BUTTON = 92
+GLOBAL_RAIL_PLAY_W = 170
+GLOBAL_RAIL_CENTER_Y = SCREEN_HEIGHT // 2
+GLOBAL_RAIL_GAP = 34
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,6 +76,9 @@ class Renderer:
         self.playlist_back_rect: Optional[pygame.Rect] = None
         self.playlist_settings_rect: Optional[pygame.Rect] = None
         self.track_back_rect: Optional[pygame.Rect] = None
+        self.global_stop_play_rect: Optional[pygame.Rect] = None
+        self.global_volume_down_rect: Optional[pygame.Rect] = None
+        self.global_volume_up_rect: Optional[pygame.Rect] = None
         
         # Menu button rects (updated when menu is drawn)
         self.menu_button_rects: Dict[str, pygame.Rect] = {}
@@ -256,6 +266,98 @@ class Renderer:
         """Render text rotated 90° CW for portrait display mode."""
         text_surface = font.render(text, True, color)
         return pygame.transform.rotate(text_surface, -90)  # -90 = 90° CW
+
+    def global_control_rects(self) -> Dict[str, pygame.Rect]:
+        """Return always-on transport rail hit rectangles."""
+        center_x = GLOBAL_RAIL_W // 2
+        center_y = GLOBAL_RAIL_CENTER_Y
+        play_rect = pygame.Rect(
+            center_x - GLOBAL_RAIL_BUTTON // 2,
+            center_y - GLOBAL_RAIL_PLAY_W // 2,
+            GLOBAL_RAIL_BUTTON,
+            GLOBAL_RAIL_PLAY_W,
+        )
+        volume_down_rect = pygame.Rect(
+            center_x - GLOBAL_RAIL_BUTTON // 2,
+            play_rect.top - GLOBAL_RAIL_GAP - GLOBAL_RAIL_BUTTON,
+            GLOBAL_RAIL_BUTTON,
+            GLOBAL_RAIL_BUTTON,
+        )
+        volume_up_rect = pygame.Rect(
+            center_x - GLOBAL_RAIL_BUTTON // 2,
+            play_rect.bottom + GLOBAL_RAIL_GAP,
+            GLOBAL_RAIL_BUTTON,
+            GLOBAL_RAIL_BUTTON,
+        )
+        return {
+            'global_stop_play': play_rect,
+            'global_volume_down': volume_down_rect,
+            'global_volume_up': volume_up_rect,
+        }
+
+    def draw_global_transport(self, ctx: RenderContext):
+        """Draw the non-dismissible STOP/PLAY and volume safety rail."""
+        if ctx.is_sleeping:
+            self.global_stop_play_rect = None
+            self.global_volume_down_rect = None
+            self.global_volume_up_rect = None
+            return
+
+        rail = pygame.Surface((GLOBAL_RAIL_W, SCREEN_HEIGHT), pygame.SRCALPHA)
+        rail.fill((8, 8, 8, 244))
+        self.screen.blit(rail, (0, 0))
+        pygame.draw.line(
+            self.screen,
+            (72, 72, 72),
+            (GLOBAL_RAIL_W - 1, 0),
+            (GLOBAL_RAIL_W - 1, SCREEN_HEIGHT),
+            2,
+        )
+
+        rects = self.global_control_rects()
+        self.global_stop_play_rect = rects['global_stop_play']
+        self.global_volume_down_rect = rects['global_volume_down']
+        self.global_volume_up_rect = rects['global_volume_up']
+
+        playing = ctx.is_playing and not ctx.hard_stopped
+        label = 'STOP' if playing else 'PLAY'
+        main_color = COLORS['error'] if playing else COLORS['accent']
+        pressed = ctx.global_pressed_button
+
+        self._draw_global_button(
+            self.global_volume_down_rect,
+            'VOL -',
+            COLORS['bg_elevated'],
+            pressed == 'global_volume_down',
+        )
+        self._draw_global_button(
+            self.global_stop_play_rect,
+            label,
+            main_color,
+            pressed == 'global_stop_play',
+            font=self.font_large,
+        )
+        self._draw_global_button(
+            self.global_volume_up_rect,
+            'VOL +',
+            COLORS['bg_elevated'],
+            pressed == 'global_volume_up',
+        )
+
+    def _draw_global_button(
+        self,
+        rect: pygame.Rect,
+        label: str,
+        bg_color: tuple,
+        pressed: bool,
+        font: Optional[pygame.font.Font] = None,
+    ):
+        """Draw one large family-safe global rail button."""
+        color = self._lighten_color(bg_color) if pressed else bg_color
+        pygame.draw.rect(self.screen, color, rect, border_radius=14)
+        pygame.draw.rect(self.screen, (255, 255, 255), rect, width=2, border_radius=14)
+        text = self._render_text_rotated(label, font or self.font_medium, COLORS['text_primary'])
+        self.screen.blit(text, text.get_rect(center=rect.center))
     
     def _draw_empty_state(self, ctx: RenderContext):
         """Draw idle screen when catalog is empty (portrait mode)."""
@@ -751,7 +853,7 @@ class Renderer:
         for i in range(count):
             x = self._LIST_ROW_X - i * row_step + scroll_offset
             rect = pygame.Rect(x, self._LIST_ROW_Y, self._LIST_ROW_H, self._LIST_ROW_W)
-            if rect.right < 20 or rect.left > self._LIST_ROW_X + self._LIST_ROW_H:
+            if rect.right < GLOBAL_RAIL_W + GLOBAL_RAIL_PADDING or rect.left > self._LIST_ROW_X + self._LIST_ROW_H:
                 continue
             rects.append((i, rect))
         return rects
