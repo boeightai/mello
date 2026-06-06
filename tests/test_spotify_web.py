@@ -12,9 +12,14 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from mello.api.spotify_web import (
+    DEFAULT_SPOTIFY_SCOPES,
     SpotifyToken,
     SpotifyWebAPI,
     SpotifyWebAPIError,
+    build_authorize_url,
+    exchange_authorization_code,
+    pkce_challenge,
+    refresh_access_token,
     load_token,
     load_token_from_env,
     load_token_from_json,
@@ -54,6 +59,32 @@ def test_token_round_trip_to_json(tmp_path):
 
     assert loaded == token
     assert not (tmp_path / "spotify-token.json.tmp").exists()
+    assert oct(token_path.stat().st_mode & 0o777) == "0o600"
+
+
+def test_pkce_challenge_uses_s256_urlsafe_base64():
+    challenge = pkce_challenge("verifier")
+
+    assert challenge == "iMnq5o6zALKXGivsnlom_0F5_WYda32GHkxlV7mq7hQ"
+    assert "=" not in challenge
+
+
+def test_build_authorize_url_includes_required_pkce_params():
+    url = build_authorize_url(
+        client_id="client",
+        redirect_uri="http://127.0.0.1:8765/callback",
+        code_verifier="verifier",
+        state="state",
+    )
+
+    assert url.startswith("https://accounts.spotify.com/authorize?")
+    assert "client_id=client" in url
+    assert "response_type=code" in url
+    assert "redirect_uri=http%3A%2F%2F127.0.0.1%3A8765%2Fcallback" in url
+    assert "code_challenge_method=S256" in url
+    assert "state=state" in url
+    for scope in DEFAULT_SPOTIFY_SCOPES:
+        assert scope in url
 
 
 def test_load_token_from_env(monkeypatch):
@@ -80,6 +111,16 @@ def test_load_token_prefers_env_over_json(monkeypatch, tmp_path):
     token = load_token(token_path)
 
     assert token.access_token == "env-access"
+
+
+def test_load_token_can_prefer_json_over_env(monkeypatch, tmp_path):
+    token_path = tmp_path / "token.json"
+    token_path.write_text(json.dumps({"access_token": "json-access"}))
+    monkeypatch.setenv("SPOTIFY_ACCESS_TOKEN", "env-access")
+
+    token = load_token(token_path, prefer_env=False)
+
+    assert token.access_token == "json-access"
 
 
 def test_token_expires_in_becomes_expires_at():
@@ -189,6 +230,69 @@ def test_transfer_playback_puts_expected_body():
         headers={"Authorization": "Bearer access"},
         timeout=10,
         json={"device_ids": ["device-1"], "play": True},
+    )
+
+
+def test_exchange_authorization_code_posts_pkce_body():
+    session = MagicMock()
+    session.post.return_value = FakeResponse(payload={
+        "access_token": "new-access",
+        "refresh_token": "new-refresh",
+        "expires_in": 3600,
+        "scope": "playlist-read-private",
+    })
+
+    token = exchange_authorization_code(
+        client_id="client",
+        redirect_uri="http://127.0.0.1:8765/callback",
+        code="code",
+        code_verifier="verifier",
+        session=session,
+        accounts_base_url="https://accounts.test",
+    )
+
+    assert token.access_token == "new-access"
+    assert token.refresh_token == "new-refresh"
+    session.post.assert_called_once_with(
+        "https://accounts.test/api/token",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data={
+            "client_id": "client",
+            "grant_type": "authorization_code",
+            "code": "code",
+            "redirect_uri": "http://127.0.0.1:8765/callback",
+            "code_verifier": "verifier",
+        },
+        timeout=10,
+    )
+
+
+def test_refresh_access_token_posts_refresh_body_and_preserves_refresh_token():
+    session = MagicMock()
+    session.post.return_value = FakeResponse(payload={
+        "access_token": "new-access",
+        "expires_in": 3600,
+    })
+    old = SpotifyToken(access_token="old", refresh_token="refresh")
+
+    token = refresh_access_token(
+        old,
+        client_id="client",
+        session=session,
+        accounts_base_url="https://accounts.test",
+    )
+
+    assert token.access_token == "new-access"
+    assert token.refresh_token == "refresh"
+    session.post.assert_called_once_with(
+        "https://accounts.test/api/token",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data={
+            "client_id": "client",
+            "grant_type": "refresh_token",
+            "refresh_token": "refresh",
+        },
+        timeout=10,
     )
 
 

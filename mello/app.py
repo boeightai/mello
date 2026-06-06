@@ -16,6 +16,7 @@ from .config import (
     LIBRESPOT_URL, LIBRESPOT_WS,
     CATALOG_PATH, PROGRESS_PATH, IMAGES_DIR, ICONS_DIR,
     SPOTIFY_TOKEN_PATH, SPOTIFY_LIBRARY_CACHE_PATH,
+    SPOTIFY_CLIENT_ID,
     MOCK_MODE, LIST_MODE_ENABLED,
     COVER_SIZE, COVER_SIZE_SMALL, COVER_SPACING,
     CAROUSEL_X, CAROUSEL_CENTER_Y, CONTROLS_X, BTN_SIZE, PLAY_BTN_SIZE, BTN_SPACING,
@@ -27,7 +28,7 @@ from .config import (
 )
 from .models import CatalogItem, NowPlaying, LibrespotStatus, MenuState, SpotifyPlaylist, SpotifyPlaylistTrack
 from .api import LibrespotAPI, NullLibrespotAPI, CatalogManager, SpotifyLibraryManager
-from .api.spotify_web import SpotifyWebAPI, SpotifyWebAPIError
+from .api.spotify_web import SpotifyWebAPI, SpotifyWebAPIError, refresh_access_token
 from .handlers import TouchHandler, EventListener, EvdevTouchHandler
 from .managers import SleepManager, SmoothCarousel, PlayTimer, PerformanceMonitor, AutoPauseManager, SetupMenu, Settings, UsageTracker, BluetoothManager
 from .controllers import VolumeController, PlaybackController, is_repeatable_spotify_context
@@ -216,7 +217,15 @@ class Mello:
         self.spotify_client = None
         self.spotify_library = None
         if not self.mock_mode:
-            self.spotify_client = SpotifyWebAPI.from_env_or_json(SPOTIFY_TOKEN_PATH)
+            token_refresher = (
+                (lambda token: refresh_access_token(token, SPOTIFY_CLIENT_ID))
+                if SPOTIFY_CLIENT_ID else None
+            )
+            self.spotify_client = SpotifyWebAPI.from_env_or_json(
+                SPOTIFY_TOKEN_PATH,
+                prefer_env=False,
+                token_refresher=token_refresher,
+            )
             self.spotify_library = SpotifyLibraryManager(
                 self.spotify_client,
                 SPOTIFY_LIBRARY_CACHE_PATH,

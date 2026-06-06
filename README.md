@@ -19,7 +19,7 @@ Kids swipe through album covers and tap to play. Parents control the music libra
 - **Bluetooth** — Connect wireless headphones or speakers
 - **WiFi setup** — Creates a hotspot for easy configuration if WiFi drops
 - **Auto-updates** — Pulls latest changes from GitHub nightly
-- **No account needed on the device** — Authentication happens via Spotify on your phone
+- **Spotify Connect-first** — The carousel works through Spotify on your phone; optional library/list mode uses Spotify Web API OAuth on the device
 
 ## Hardware
 
@@ -47,14 +47,14 @@ Use the [Raspberry Pi Imager](https://www.raspberrypi.com/software/):
 
 ```bash
 ssh <your-user>@<your-hostname>.local
-curl -sSL https://raw.githubusercontent.com/emieljanson/mello/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/boeightai/mello/main/install.sh | bash
 sudo reboot
 ```
 
 To install without anonymous usage analytics:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/emieljanson/mello/main/install.sh | bash -s -- --no-analytics
+curl -sSL https://raw.githubusercontent.com/boeightai/mello/main/install.sh | bash -s -- --no-analytics
 ```
 
 ### 3. Connect Spotify

@@ -4,23 +4,138 @@ Spotify Web API client and token storage helpers.
 This module provides the credential/cache foundation for Spotify Web API
 features while remaining fully testable with a mocked requests session.
 """
+from __future__ import annotations
+
+import base64
+import hashlib
 import json
 import logging
 import os
+import secrets
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Optional
+from urllib.parse import urlencode
 
 import requests
 
 logger = logging.getLogger(__name__)
 
 SPOTIFY_API_BASE_URL = "https://api.spotify.com/v1"
+SPOTIFY_ACCOUNTS_BASE_URL = "https://accounts.spotify.com"
+DEFAULT_SPOTIFY_SCOPES = (
+    "playlist-read-private",
+    "playlist-read-collaborative",
+    "user-read-playback-state",
+    "user-modify-playback-state",
+)
 
 
 class SpotifyWebAPIError(RuntimeError):
     """Raised when the Spotify Web API returns an unsuccessful response."""
+
+
+def generate_pkce_verifier(length: int = 64) -> str:
+    """Generate a PKCE code verifier."""
+    return secrets.token_urlsafe(length)[:128]
+
+
+def pkce_challenge(verifier: str) -> str:
+    """Generate a Spotify-compatible S256 PKCE challenge."""
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
+def build_authorize_url(
+    client_id: str,
+    redirect_uri: str,
+    code_verifier: str,
+    scopes: Optional[List[str]] = None,
+    state: Optional[str] = None,
+    accounts_base_url: str = SPOTIFY_ACCOUNTS_BASE_URL,
+) -> str:
+    """Build a Spotify Authorization Code with PKCE authorize URL."""
+    if not client_id:
+        raise SpotifyWebAPIError("Spotify client ID is not configured")
+
+    params = {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": " ".join(scopes or list(DEFAULT_SPOTIFY_SCOPES)),
+        "code_challenge_method": "S256",
+        "code_challenge": pkce_challenge(code_verifier),
+    }
+    if state:
+        params["state"] = state
+    return f"{accounts_base_url.rstrip('/')}/authorize?{urlencode(params)}"
+
+
+def _token_from_response(data: dict, previous_refresh_token: Optional[str] = None) -> SpotifyToken:
+    token_data = dict(data)
+    if previous_refresh_token and not token_data.get("refresh_token"):
+        token_data["refresh_token"] = previous_refresh_token
+    token = SpotifyToken.from_dict(token_data)
+    if not token:
+        raise SpotifyWebAPIError("Spotify token response did not include an access token")
+    return token
+
+
+def exchange_authorization_code(
+    client_id: str,
+    redirect_uri: str,
+    code: str,
+    code_verifier: str,
+    session: Optional[requests.Session] = None,
+    accounts_base_url: str = SPOTIFY_ACCOUNTS_BASE_URL,
+) -> SpotifyToken:
+    """Exchange a PKCE authorization code for a Spotify token."""
+    if not client_id:
+        raise SpotifyWebAPIError("Spotify client ID is not configured")
+    req = session or requests.Session()
+    resp = req.post(
+        f"{accounts_base_url.rstrip('/')}/api/token",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data={
+            "client_id": client_id,
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "code_verifier": code_verifier,
+        },
+        timeout=10,
+    )
+    if resp.status_code != 200:
+        raise SpotifyWebAPIError(f"Spotify authorization code exchange failed: {getattr(resp, 'text', '')}")
+    return _token_from_response(resp.json())
+
+
+def refresh_access_token(
+    token: SpotifyToken,
+    client_id: str,
+    session: Optional[requests.Session] = None,
+    accounts_base_url: str = SPOTIFY_ACCOUNTS_BASE_URL,
+) -> SpotifyToken:
+    """Refresh a Spotify access token using the PKCE refresh-token flow."""
+    if not client_id:
+        raise SpotifyWebAPIError("Spotify client ID is not configured")
+    if not token.refresh_token:
+        raise SpotifyWebAPIError("Spotify refresh token is not configured")
+    req = session or requests.Session()
+    resp = req.post(
+        f"{accounts_base_url.rstrip('/')}/api/token",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data={
+            "client_id": client_id,
+            "grant_type": "refresh_token",
+            "refresh_token": token.refresh_token,
+        },
+        timeout=10,
+    )
+    if resp.status_code != 200:
+        raise SpotifyWebAPIError(f"Spotify token refresh failed: {getattr(resp, 'text', '')}")
+    return _token_from_response(resp.json(), previous_refresh_token=token.refresh_token)
 
 
 @dataclass
@@ -118,17 +233,20 @@ def save_token_to_json(token: SpotifyToken, path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(path.suffix + ".tmp")
     temp_path.write_text(json.dumps(token.to_dict(), indent=2))
+    temp_path.chmod(0o600)
     os.replace(temp_path, path)
+    path.chmod(0o600)
 
 
 def load_token(
     token_path: Optional[Path] = None,
     env_prefix: str = "SPOTIFY_",
+    prefer_env: bool = True,
 ) -> Optional[SpotifyToken]:
-    """Load token data from env first, then from a local JSON file."""
-    return load_token_from_env(env_prefix) or (
-        load_token_from_json(token_path) if token_path else None
-    )
+    """Load token data from env and/or a local JSON file."""
+    env_token = load_token_from_env(env_prefix)
+    json_token = load_token_from_json(token_path) if token_path else None
+    return (env_token or json_token) if prefer_env else (json_token or env_token)
 
 
 class SpotifyWebAPI:
@@ -153,10 +271,15 @@ class SpotifyWebAPI:
         cls,
         token_path: Optional[Path] = None,
         env_prefix: str = "SPOTIFY_",
+        prefer_env: bool = True,
         **kwargs,
     ) -> "SpotifyWebAPI":
         """Create a client using env token data, falling back to JSON storage."""
-        return cls(token=load_token(token_path, env_prefix), token_path=token_path, **kwargs)
+        return cls(
+            token=load_token(token_path, env_prefix, prefer_env=prefer_env),
+            token_path=token_path,
+            **kwargs,
+        )
 
     def _refresh_if_needed(self):
         if not self.token or not self.token.is_expired() or not self.token_refresher:

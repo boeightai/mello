@@ -14,7 +14,14 @@ import shutil
 
 from pathlib import Path
 
-from ..config import CATALOG_PATH, IMAGES_DIR, LIBRESPOT_STATE_PATH, SETTINGS_PATH
+from ..config import (
+    CATALOG_PATH,
+    IMAGES_DIR,
+    LIBRESPOT_STATE_PATH,
+    SETTINGS_PATH,
+    SPOTIFY_LIBRARY_CACHE_PATH,
+    SPOTIFY_TOKEN_PATH,
+)
 from ..models import MenuState
 
 _REPO_DIR = str(Path(__file__).resolve().parent.parent.parent)
@@ -582,7 +589,16 @@ class SetupMenu:
         except Exception as e:
             logger.error(f'Failed to clear Spotify credentials: {e}')
 
-        # 3. Delete settings (auto-pause, volume, BT device memory)
+        # 3. Clear Spotify Web API token/cache used by list mode
+        try:
+            for path in (SPOTIFY_TOKEN_PATH, SPOTIFY_LIBRARY_CACHE_PATH):
+                if path.exists():
+                    path.unlink()
+            logger.info('Spotify Web API token/cache cleared')
+        except Exception as e:
+            logger.error(f'Failed to clear Spotify Web API token/cache: {e}')
+
+        # 4. Delete settings (auto-pause, volume, BT device memory)
         try:
             if SETTINGS_PATH.exists():
                 SETTINGS_PATH.unlink()
@@ -590,7 +606,7 @@ class SetupMenu:
         except Exception as e:
             logger.error(f'Failed to delete settings: {e}')
 
-        # 4. Delete cached album images
+        # 5. Delete cached album images
         try:
             if IMAGES_DIR.exists():
                 shutil.rmtree(IMAGES_DIR)
@@ -598,7 +614,7 @@ class SetupMenu:
         except Exception as e:
             logger.error(f'Failed to delete image cache: {e}')
 
-        # 5. Forget all Bluetooth paired devices
+        # 6. Forget all Bluetooth paired devices
         try:
             subprocess.run(
                 ['bluetoothctl', 'disconnect'],
