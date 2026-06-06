@@ -22,6 +22,7 @@ sys.modules.setdefault('pygame', pygame_stub)
 sys.modules.setdefault('pygame.gfxdraw', types.ModuleType('pygame.gfxdraw'))
 
 from mello.app import Mello
+from mello.api.spotify_library import LIKED_SONGS_ID
 from mello.models import NowPlaying, SpotifyPlaylist, SpotifyPlaylistTrack
 
 
@@ -224,6 +225,43 @@ def test_global_rail_background_consumes_hidden_controls():
     assert app._list_touch_start is None
     app.api.play.assert_not_called()
     app._handle_button_tap.assert_not_called()
+
+
+def test_liked_songs_track_tap_uses_spotify_direct_track_list_playback():
+    app = _make_app('tracks')
+    liked = SpotifyPlaylist(
+        id=LIKED_SONGS_ID,
+        uri='spotify:collection:tracks',
+        name='Liked Songs',
+        owner_name='Spotify Library',
+    )
+    tracks = [_track('t1', 'One'), _track('t2', 'Two')]
+    app._selected_playlist_id = LIKED_SONGS_ID
+    app.spotify_client = SimpleNamespace(
+        token=object(),
+        available_devices=MagicMock(),
+        transfer_playback=MagicMock(),
+        start_tracks_on_device=MagicMock(),
+    )
+    app.spotify_library = SimpleNamespace(
+        playlists=[liked],
+        tracks_for_playlist=lambda playlist_id: tracks,
+        refresh_playlist_tracks=MagicMock(),
+        refresh_playlists=MagicMock(),
+    )
+
+    with patch('mello.app.run_async') as mock_run:
+        mock_run.side_effect = lambda fn, *args: fn(*args)
+        app._handle_touch_down((230, 20))
+        app._handle_list_touch_up((230, 20))
+
+    app.spotify_client.transfer_playback.assert_called_once_with('local-device', play=False)
+    app.spotify_client.start_tracks_on_device.assert_called_once_with(
+        track_uris=['spotify:track:t1', 'spotify:track:t2'],
+        device_id='local-device',
+        offset_uri='spotify:track:t1',
+    )
+    app.api.play.assert_not_called()
 
 
 def test_list_scroll_offset_is_clamped():

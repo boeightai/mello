@@ -28,6 +28,7 @@ from .config import (
 )
 from .models import CatalogItem, NowPlaying, LibrespotStatus, MenuState, SpotifyPlaylist, SpotifyPlaylistTrack
 from .api import LibrespotAPI, NullLibrespotAPI, CatalogManager, SpotifyLibraryManager
+from .api.spotify_library import LIKED_SONGS_ID
 from .api.spotify_web import SpotifyWebAPI, SpotifyWebAPIError, refresh_access_token
 from .handlers import TouchHandler, EventListener, EvdevTouchHandler
 from .managers import SleepManager, SmoothCarousel, PlayTimer, PerformanceMonitor, AutoPauseManager, SetupMenu, Settings, UsageTracker, BluetoothManager
@@ -526,27 +527,38 @@ class Mello:
         def _refresh():
             self._spotify_refresh_in_progress = True
             try:
-                playlists = self.spotify_library.refresh_playlists()
-                playlist = self._selected_spotify_playlist() or (playlists[0] if playlists else None)
-                if playlist:
-                    candidates = [playlist] + [
-                        candidate for candidate in playlists if candidate.id != playlist.id
-                    ]
-                    last_error = None
-                    for candidate in candidates:
-                        try:
-                            self.spotify_library.refresh_playlist_tracks(candidate.id)
-                            self._selected_playlist_id = candidate.id
-                            break
-                        except Exception as e:
-                            last_error = e
-                            logger.warning(
-                                'Spotify playlist tracks unavailable | '
-                                f'playlist={candidate.id} error={e}'
-                            )
-                    else:
-                        if last_error:
-                            raise last_error
+                if hasattr(self.spotify_library, 'refresh_all'):
+                    playlists = self.spotify_library.refresh_all()
+                    if not self._selected_spotify_playlist() and playlists:
+                        self._selected_playlist_id = playlists[0].id
+                else:
+                    playlists = self.spotify_library.refresh_playlists()
+                    playlist = self._selected_spotify_playlist() or (playlists[0] if playlists else None)
+                    if playlist:
+                        candidates = [playlist] + [
+                            candidate for candidate in playlists if candidate.id != playlist.id
+                        ]
+                        last_error = None
+                        for candidate in candidates:
+                            try:
+                                self.spotify_library.refresh_playlist_tracks(candidate.id)
+                                self._selected_playlist_id = candidate.id
+                                break
+                            except Exception as e:
+                                last_error = e
+                                logger.warning(
+                                    'Spotify playlist tracks unavailable | '
+                                    f'playlist={candidate.id} error={e}'
+                                )
+                        else:
+                            if last_error:
+                                raise last_error
+                if not self._selected_spotify_playlist() and playlists:
+                    self._selected_playlist_id = playlists[0].id
+                if self._selected_playlist_id and not any(p.id == self._selected_playlist_id for p in playlists):
+                    self._selected_playlist_id = playlists[0].id if playlists else None
+                if playlists and not any(self.spotify_library.tracks_for_playlist(p.id) for p in playlists):
+                    logger.warning('Spotify library refresh found no playable playlist tracks')
                 logger.info(f'Spotify library refreshed | playlists={len(playlists)}')
                 self.renderer.invalidate()
             except Exception as e:
@@ -689,20 +701,31 @@ class Mello:
         self.volume.unmute()
         self.playback.play_state.start_loading()
         self.renderer.invalidate()
+        stop_generation = self._global_stop_verify_generation
 
         def _play():
-            if self._is_hard_stopped():
+            if self._is_hard_stopped() or stop_generation != self._global_stop_verify_generation:
                 return
             device_id = self._spotify_device_id()
             if self.spotify_client and self.spotify_client.token and device_id:
                 try:
                     self.spotify_client.transfer_playback(device_id, play=False)
-                    self.spotify_client.start_playlist_track_on_device(
-                        playlist_uri=playlist.uri,
-                        track_uri=track.uri,
-                        device_id=device_id,
-                    )
-                    if self._is_hard_stopped():
+                    if self._is_hard_stopped() or stop_generation != self._global_stop_verify_generation:
+                        return
+                    if playlist.id == LIKED_SONGS_ID:
+                        track_uris = self._track_window_for_playback(track.uri)
+                        self.spotify_client.start_tracks_on_device(
+                            track_uris=track_uris or [track.uri],
+                            device_id=device_id,
+                            offset_uri=track.uri,
+                        )
+                    else:
+                        self.spotify_client.start_playlist_track_on_device(
+                            playlist_uri=playlist.uri,
+                            track_uri=track.uri,
+                            device_id=device_id,
+                        )
+                    if self._is_hard_stopped() or stop_generation != self._global_stop_verify_generation:
                         logger.warning(
                             f'Spotify track play success ignored | reason=hard_stopped | track={track.uri[:40]}'
                         )
@@ -713,6 +736,11 @@ class Mello:
                 except SpotifyWebAPIError as e:
                     logger.warning(f'Spotify Web API track play failed, falling back: {e}')
 
+            if playlist.id == LIKED_SONGS_ID:
+                self._show_toast('Connect Spotify to Mello')
+                return
+            if self._is_hard_stopped() or stop_generation != self._global_stop_verify_generation:
+                return
             result = self.api.play(playlist.uri, skip_to_uri=track.uri)
             if self._is_hard_stopped():
                 return
@@ -722,6 +750,27 @@ class Mello:
                 self._show_toast('Could not play track')
 
         run_async(_play)
+
+    def _track_window_for_playback(self, selected_track_uri: str, limit: int = 100) -> List[str]:
+        """Return a playable URI window for direct-track Spotify playback."""
+        tracks = [
+            track
+            for track in self._selected_playlist_tracks()
+            if track.is_playable and not track.is_local
+        ]
+        if not tracks:
+            return [selected_track_uri] if selected_track_uri else []
+
+        start = 0
+        for index, track in enumerate(tracks):
+            if track.uri == selected_track_uri:
+                start = index
+                break
+
+        uris = [track.uri for track in tracks[start:start + limit]]
+        if selected_track_uri and selected_track_uri not in uris:
+            uris.insert(0, selected_track_uri)
+        return uris
     
     def _show_toast(self, message: str):
         """Show a brief toast message on screen."""

@@ -16,6 +16,9 @@ from ..models import SpotifyPlaylist, SpotifyPlaylistTrack
 
 logger = logging.getLogger(__name__)
 
+LIKED_SONGS_ID = '__liked_songs__'
+LIKED_SONGS_URI = 'spotify:collection:tracks'
+
 
 class SpotifyLibraryClient(Protocol):
     """Client shape needed by SpotifyLibraryManager."""
@@ -24,6 +27,9 @@ class SpotifyLibraryClient(Protocol):
         ...
 
     def playlist_items(self, playlist_id: str, limit: int = 100) -> List[dict]:
+        ...
+
+    def saved_tracks(self, limit: int = 50) -> List[dict]:
         ...
 
 
@@ -110,14 +116,15 @@ class SpotifyLibraryManager:
     def refresh_playlists(self, save: bool = True) -> List[SpotifyPlaylist]:
         """Fetch current user's playlists and update the cache."""
         raw_playlists = self.client.current_user_playlists()
-        playlists = [
+        playlists = [self._liked_songs_playlist()]
+        playlists.extend(
             playlist
             for playlist in (
                 SpotifyPlaylist.from_api(item)
                 for item in raw_playlists
             )
             if playlist is not None
-        ]
+        )
 
         with self._lock:
             self._playlists = playlists
@@ -131,7 +138,11 @@ class SpotifyLibraryManager:
         save: bool = True,
     ) -> List[SpotifyPlaylistTrack]:
         """Fetch tracks for one playlist and update the cache."""
-        raw_items = self.client.playlist_items(playlist_id)
+        raw_items = (
+            self.client.saved_tracks()
+            if playlist_id == LIKED_SONGS_ID
+            else self.client.playlist_items(playlist_id)
+        )
         tracks = [
             track
             for track in (
@@ -151,7 +162,12 @@ class SpotifyLibraryManager:
         """Fetch playlists and tracks for every playlist."""
         playlists = self.refresh_playlists(save=False)
         for playlist in playlists:
-            self.refresh_playlist_tracks(playlist.id, save=False)
+            try:
+                self.refresh_playlist_tracks(playlist.id, save=False)
+            except Exception as e:
+                logger.warning(
+                    f'Spotify playlist tracks unavailable | playlist={playlist.id} error={e}'
+                )
         if save:
             with self._lock:
                 self._save_cache_locked()
@@ -181,3 +197,13 @@ class SpotifyLibraryManager:
             if temp_path.exists():
                 temp_path.unlink()
             raise
+
+    @staticmethod
+    def _liked_songs_playlist() -> SpotifyPlaylist:
+        """Synthetic playlist row for the current user's Spotify library."""
+        return SpotifyPlaylist(
+            id=LIKED_SONGS_ID,
+            uri=LIKED_SONGS_URI,
+            name='Liked Songs',
+            owner_name='Spotify Library',
+        )

@@ -27,6 +27,7 @@ SPOTIFY_ACCOUNTS_BASE_URL = "https://accounts.spotify.com"
 DEFAULT_SPOTIFY_SCOPES = (
     "playlist-read-private",
     "playlist-read-collaborative",
+    "user-library-read",
     "user-read-playback-state",
     "user-modify-playback-state",
 )
@@ -359,6 +360,48 @@ class SpotifyWebAPI:
         """Return all playlist item rows by following Spotify pagination."""
         endpoint = f"/playlists/{playlist_id}/items"
         return list(self._paged(endpoint, params={"limit": limit, "additional_types": "track"}))
+
+    def saved_tracks(self, limit: int = 50) -> List[dict]:
+        """Return current user's saved tracks by following Spotify pagination."""
+        return list(self._paged("/me/tracks", params={"limit": limit, "market": "from_token"}))
+
+    def start_tracks_on_device(
+        self,
+        track_uris: List[str],
+        device_id: str,
+        offset_uri: Optional[str] = None,
+        position_ms: int = 0,
+    ) -> bool:
+        """Start tracks directly on a Spotify Connect device."""
+        if not track_uris:
+            raise SpotifyWebAPIError("No Spotify track URIs were provided")
+        payload = {
+            "uris": track_uris,
+            "position_ms": position_ms,
+        }
+        if offset_uri:
+            payload["offset"] = {"uri": offset_uri}
+        self._request(
+            "PUT",
+            "/me/player/play",
+            params={"device_id": device_id},
+            json=payload,
+        )
+        return True
+
+    def start_track_on_device(
+        self,
+        track_uri: str,
+        device_id: str,
+        position_ms: int = 0,
+    ) -> bool:
+        """Start one track directly on a Spotify Connect device."""
+        return self.start_tracks_on_device(
+            track_uris=[track_uri],
+            device_id=device_id,
+            offset_uri=track_uri,
+            position_ms=position_ms,
+        )
 
     def start_playlist_track_on_device(
         self,

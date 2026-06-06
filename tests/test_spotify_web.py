@@ -194,6 +194,48 @@ def test_playlist_items_follows_pagination():
     assert first_call.kwargs["params"] == {"limit": 2, "additional_types": "track"}
 
 
+def test_saved_tracks_follows_pagination():
+    session = MagicMock()
+    session.request.side_effect = [
+        FakeResponse(payload={"items": [{"track": {"uri": "spotify:track:1"}}], "next": "/next"}),
+        FakeResponse(payload={"items": [{"track": {"uri": "spotify:track:2"}}], "next": None}),
+    ]
+    client = make_client(session=session)
+
+    items = client.saved_tracks(limit=2)
+
+    assert [item["track"]["uri"] for item in items] == ["spotify:track:1", "spotify:track:2"]
+    first_call = session.request.call_args_list[0]
+    assert first_call.args[1] == "https://api.spotify.com/v1/me/tracks"
+    assert first_call.kwargs["params"] == {"limit": 2, "market": "from_token"}
+
+
+def test_start_tracks_on_device_puts_expected_body():
+    session = MagicMock()
+    session.request.return_value = FakeResponse(status_code=204)
+    client = make_client(session=session)
+
+    result = client.start_tracks_on_device(
+        track_uris=["spotify:track:abc", "spotify:track:def"],
+        offset_uri="spotify:track:def",
+        device_id="device-1",
+    )
+
+    assert result is True
+    session.request.assert_called_once_with(
+        "PUT",
+        "https://api.spotify.com/v1/me/player/play",
+        headers={"Authorization": "Bearer access"},
+        timeout=10,
+        params={"device_id": "device-1"},
+        json={
+            "uris": ["spotify:track:abc", "spotify:track:def"],
+            "position_ms": 0,
+            "offset": {"uri": "spotify:track:def"},
+        },
+    )
+
+
 def test_start_playlist_track_on_device_puts_expected_body():
     session = MagicMock()
     session.request.return_value = FakeResponse(status_code=204)

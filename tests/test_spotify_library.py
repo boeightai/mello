@@ -6,15 +6,17 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from mello.api.spotify_library import SpotifyLibraryManager
+from mello.api.spotify_library import LIKED_SONGS_ID, SpotifyLibraryManager
 
 
 class FakeSpotifyWebAPI:
-    def __init__(self, playlist_pages=None, track_pages=None):
+    def __init__(self, playlist_pages=None, track_pages=None, saved_track_pages=None):
         self.playlist_pages = playlist_pages or []
         self.track_pages = track_pages or {}
+        self.saved_track_pages = saved_track_pages or []
         self.playlist_calls = 0
         self.track_calls = []
+        self.saved_track_calls = 0
 
     def current_user_playlists(self, limit=50):
         self.playlist_calls += 1
@@ -23,6 +25,10 @@ class FakeSpotifyWebAPI:
     def playlist_items(self, playlist_id, limit=100):
         self.track_calls.append(playlist_id)
         return [item for page in self.track_pages.get(playlist_id, []) for item in page]
+
+    def saved_tracks(self, limit=50):
+        self.saved_track_calls += 1
+        return [item for page in self.saved_track_pages for item in page]
 
 
 def playlist_payload(playlist_id, name, total=0, image=None):
@@ -67,18 +73,23 @@ def test_refresh_all_uses_paginated_fake_results_and_preserves_order(tmp_path):
             'p1': [[track_item('t1', 'One')], [track_item('t2', 'Two')]],
             'p2': [[track_item('t3', 'Three')]],
         },
+        saved_track_pages=[[track_item('liked', 'Liked')]],
     )
     manager = SpotifyLibraryManager(client, tmp_path / 'spotify-library.json')
 
     playlists = manager.refresh_all()
 
-    assert [playlist.id for playlist in playlists] == ['p1', 'p2']
+    assert [playlist.id for playlist in playlists] == [LIKED_SONGS_ID, 'p1', 'p2']
+    assert [track.uri for track in manager.tracks_for_playlist(LIKED_SONGS_ID)] == [
+        'spotify:track:liked',
+    ]
     assert [track.uri for track in manager.tracks_for_playlist('p1')] == [
         'spotify:track:t1',
         'spotify:track:t2',
     ]
     assert [track.position for track in manager.tracks_for_playlist('p1')] == [0, 1]
     assert client.track_calls == ['p1', 'p2']
+    assert client.saved_track_calls == 1
 
 
 def test_cache_round_trip_loads_playlists_and_tracks_on_startup(tmp_path):
@@ -92,8 +103,8 @@ def test_cache_round_trip_loads_playlists_and_tracks_on_startup(tmp_path):
 
     loaded = SpotifyLibraryManager(FakeSpotifyWebAPI(), cache_path)
 
-    assert [playlist.name for playlist in loaded.playlists] == ['Morning']
-    assert loaded.playlists[0].image == 'https://img/p1.jpg'
+    assert [playlist.name for playlist in loaded.playlists] == ['Liked Songs', 'Morning']
+    assert loaded.playlists[1].image == 'https://img/p1.jpg'
     assert [track.name for track in loaded.tracks_for_playlist('p1')] == ['One']
     assert loaded.tracks_for_playlist('p1')[0].artist == 'A'
     assert not (tmp_path / 'spotify-library.json.tmp').exists()
@@ -108,8 +119,29 @@ def test_empty_playlist_caches_empty_track_list(tmp_path):
 
     manager.refresh_all()
 
-    assert [playlist.id for playlist in manager.playlists] == ['empty']
+    assert [playlist.id for playlist in manager.playlists] == [LIKED_SONGS_ID, 'empty']
     assert manager.tracks_for_playlist('empty') == []
+
+
+def test_refresh_all_skips_unreadable_playlist_tracks(tmp_path):
+    class FailingTracksClient(FakeSpotifyWebAPI):
+        def playlist_items(self, playlist_id, limit=100):
+            self.track_calls.append(playlist_id)
+            if playlist_id == 'blocked':
+                raise RuntimeError('forbidden')
+            return [track_item('ok', 'Okay')]
+
+    client = FailingTracksClient(
+        playlist_pages=[[playlist_payload('blocked', 'Blocked'), playlist_payload('good', 'Good')]],
+        saved_track_pages=[[track_item('liked', 'Liked')]],
+    )
+    manager = SpotifyLibraryManager(client, tmp_path / 'spotify-library.json')
+
+    playlists = manager.refresh_all()
+
+    assert [playlist.id for playlist in playlists] == [LIKED_SONGS_ID, 'blocked', 'good']
+    assert manager.tracks_for_playlist('blocked') == []
+    assert [track.name for track in manager.tracks_for_playlist('good')] == ['Okay']
 
 
 def test_missing_track_rows_are_skipped_without_breaking_order(tmp_path):
