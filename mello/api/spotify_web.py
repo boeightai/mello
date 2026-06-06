@@ -1,9 +1,8 @@
 """
 Spotify Web API client and token storage helpers.
 
-This module is intentionally not wired into the app yet. It provides the
-credential/cache foundation for future Spotify Web API features while remaining
-fully testable with a mocked requests session.
+This module provides the credential/cache foundation for Spotify Web API
+features while remaining fully testable with a mocked requests session.
 """
 import json
 import logging

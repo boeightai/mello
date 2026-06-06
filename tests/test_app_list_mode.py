@@ -54,6 +54,9 @@ def _make_app(mode='playlists'):
     app._selected_playlist_id = playlist.id
     app._playlist_scroll_offset = 0
     app._track_scroll_offset = 0
+    app._list_touch_start = None
+    app._list_touch_last = None
+    app._list_touch_scrolled = False
     app._pressed_list_index = None
     app._spotify_refresh_in_progress = False
     app._last_action_time = 0
@@ -103,6 +106,7 @@ def test_playlist_row_tap_enters_track_list_without_carousel_fallthrough():
     app = _make_app('playlists')
 
     app._handle_touch_down((20, 20))
+    app._handle_list_touch_up((20, 20))
 
     assert app.ui_mode == 'tracks'
     assert app._selected_playlist_id == 'p1'
@@ -117,6 +121,7 @@ def test_track_row_tap_plays_track_with_local_fallback():
     with patch('mello.app.run_async') as mock_run:
         mock_run.side_effect = lambda fn, *args: fn(*args)
         app._handle_touch_down((20, 20))
+        app._handle_list_touch_up((20, 20))
 
     app.volume.unmute.assert_called_once()
     app.playback.play_state.start_loading.assert_called_once()
@@ -129,6 +134,7 @@ def test_track_back_tap_returns_to_playlist_list():
     app = _make_app('tracks')
 
     app._handle_touch_down((110, 110))
+    app._handle_list_touch_up((110, 110))
 
     assert app.ui_mode == 'playlists'
     app.renderer.invalidate.assert_called()
@@ -144,3 +150,41 @@ def test_draw_list_mode_uses_track_renderer():
     args = app.renderer.draw_track_list.call_args.args
     assert args[0].uri == 'spotify:playlist:p1'
     assert args[1][0]['uri'] == 'spotify:track:t1'
+
+
+def test_list_drag_scrolls_without_row_tap():
+    app = _make_app('tracks')
+    app.spotify_library = SimpleNamespace(
+        playlists=[_playlist()],
+        tracks_for_playlist=lambda playlist_id: [_track(str(i), f'Song {i}') for i in range(20)],
+        refresh_playlist_tracks=MagicMock(),
+        refresh_playlists=MagicMock(),
+    )
+    app.renderer._LIST_ROW_H = 82
+    app.renderer._LIST_ROW_GAP = 10
+    app.renderer._LIST_ROW_X = 560
+
+    app._handle_touch_down((20, 20))
+    app._handle_list_motion((120, 20))
+    app._handle_list_touch_up((120, 20))
+
+    assert app._track_scroll_offset == 100
+    app.api.play.assert_not_called()
+    app.renderer.invalidate.assert_called()
+
+
+def test_list_scroll_offset_is_clamped():
+    app = _make_app('playlists')
+    app.spotify_library = SimpleNamespace(
+        playlists=[_playlist(str(i), f'Playlist {i}') for i in range(20)],
+        tracks_for_playlist=lambda playlist_id: [],
+        refresh_playlist_tracks=MagicMock(),
+        refresh_playlists=MagicMock(),
+    )
+    app.renderer._LIST_ROW_H = 82
+    app.renderer._LIST_ROW_GAP = 10
+    app.renderer._LIST_ROW_X = 560
+
+    app._set_list_scroll_offset(10_000)
+
+    assert app._playlist_scroll_offset == (20 - 1) * (82 + 10) - 560

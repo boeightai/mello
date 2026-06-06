@@ -283,10 +283,19 @@ class Mello:
         self._connected_lock = threading.Lock()
         self.selected_index = 0
         self.list_mode_enabled = LIST_MODE_ENABLED
-        self.ui_mode = 'tracks' if self.list_mode_enabled else 'carousel'
+        has_spotify_token = bool(self.spotify_client and self.spotify_client.token)
+        has_cached_library = bool(self.spotify_library and self.spotify_library.playlists)
+        self.ui_mode = (
+            'tracks'
+            if self.list_mode_enabled and (has_spotify_token or has_cached_library)
+            else 'carousel'
+        )
         self._selected_playlist_id: Optional[str] = None
         self._playlist_scroll_offset: int = 0
         self._track_scroll_offset: int = 0
+        self._list_touch_start: Optional[tuple] = None
+        self._list_touch_last: Optional[tuple] = None
+        self._list_touch_scrolled: bool = False
         self._pressed_list_index: Optional[int] = None
         self._spotify_refresh_in_progress = False
         self._connection_fail_count = 0
@@ -403,7 +412,7 @@ class Mello:
         
         # Initialize carousel
         self._update_carousel_max_index()
-        if self.list_mode_enabled:
+        if self.list_mode_enabled and has_spotify_token:
             self._refresh_spotify_library()
     
     def _load_icons(self) -> dict:
@@ -553,7 +562,72 @@ class Mello:
         """Return to the legacy carousel UI."""
         self.ui_mode = 'carousel'
         self._pressed_list_index = None
+        self._list_touch_start = None
+        self._list_touch_last = None
+        self._list_touch_scrolled = False
         self.renderer.invalidate()
+
+    def _list_row_count(self) -> int:
+        """Number of rows in the active list mode."""
+        if self.ui_mode == 'playlists':
+            return len(self._playlist_catalog_items())
+        if self.ui_mode == 'tracks':
+            return len(self._selected_playlist_tracks())
+        return 0
+
+    def _max_list_scroll_offset(self, row_count: Optional[int] = None) -> int:
+        """Maximum physical-x scroll offset for the active portrait list."""
+        count = self._list_row_count() if row_count is None else row_count
+        if count <= 0:
+            return 0
+        row_step = getattr(self.renderer, '_LIST_ROW_H', 82) + getattr(self.renderer, '_LIST_ROW_GAP', 10)
+        first_x = getattr(self.renderer, '_LIST_ROW_X', 560)
+        return max(0, (count - 1) * row_step - first_x)
+
+    def _list_scroll_offset(self) -> int:
+        """Current scroll offset for the active list."""
+        return self._playlist_scroll_offset if self.ui_mode == 'playlists' else self._track_scroll_offset
+
+    def _set_list_scroll_offset(self, offset: int):
+        """Set clamped scroll offset for the active list."""
+        clamped = max(0, min(int(offset), self._max_list_scroll_offset()))
+        if self.ui_mode == 'playlists':
+            self._playlist_scroll_offset = clamped
+        elif self.ui_mode == 'tracks':
+            self._track_scroll_offset = clamped
+
+    def _handle_list_touch_down(self, pos):
+        """Start a list gesture. Tap is resolved on touch-up unless dragged."""
+        self._list_touch_start = pos
+        self._list_touch_last = pos
+        self._list_touch_scrolled = False
+        self._pressed_list_index = None
+
+    def _handle_list_motion(self, pos):
+        """Scroll the active list with physical x-axis drag."""
+        if not self._list_touch_last:
+            return
+        dx = pos[0] - self._list_touch_last[0]
+        if abs(dx) > 2:
+            self._set_list_scroll_offset(self._list_scroll_offset() + dx)
+            if self._list_touch_start and abs(pos[0] - self._list_touch_start[0]) > 10:
+                self._list_touch_scrolled = True
+            self._list_touch_last = pos
+            self.renderer.invalidate()
+
+    def _handle_list_touch_up(self, pos):
+        """Complete a list gesture, treating non-scrolls as taps."""
+        if self._list_touch_start is None:
+            return
+        scrolled = self._list_touch_scrolled
+        self._list_touch_start = None
+        self._list_touch_last = None
+        self._list_touch_scrolled = False
+        if scrolled:
+            self._pressed_list_index = None
+            self.renderer.invalidate()
+            return
+        self._handle_list_tap(pos)
 
     def _spotify_device_id(self) -> Optional[str]:
         """Best-effort Spotify Connect device ID for Mello."""
@@ -1494,6 +1568,9 @@ class Mello:
                         self.setup_menu.handle_scroll(
                             dx, self.renderer.menu_content_overflow)
                         self._menu_touch_start = event.pos
+                elif self._list_mode_active() and self._list_touch_start is not None:
+                    self.sleep_manager.reset_timer()
+                    self._handle_list_motion(event.pos)
                 elif self.touch.dragging:
                     self.sleep_manager.reset_timer()
                     self.touch.on_move(event.pos)
@@ -1516,6 +1593,8 @@ class Mello:
                             self.setup_menu.handle_tap(event.pos, self.renderer.menu_button_rects)
                         self._menu_touch_start = None
                         self._menu_touch_scrolled = False
+                    elif self._list_mode_active() and self._list_touch_start is not None:
+                        self._handle_list_touch_up(event.pos)
                     else:
                         self._handle_touch_up(event.pos)
                     self._handle_button_up()
@@ -1558,7 +1637,7 @@ class Mello:
             return
 
         if self._list_mode_active():
-            self._handle_list_tap(pos)
+            self._handle_list_touch_down(pos)
             return
         
         x, y = pos
