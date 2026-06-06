@@ -9,6 +9,7 @@ data/
 
 # Logs
 *.log
+mello.log.*
 logs/
 
 # macOS
