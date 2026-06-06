@@ -15,7 +15,8 @@ from .config import (
     SCREEN_WIDTH, SCREEN_HEIGHT,
     LIBRESPOT_URL, LIBRESPOT_WS,
     CATALOG_PATH, PROGRESS_PATH, IMAGES_DIR, ICONS_DIR,
-    MOCK_MODE,
+    SPOTIFY_TOKEN_PATH, SPOTIFY_LIBRARY_CACHE_PATH,
+    MOCK_MODE, LIST_MODE_ENABLED,
     COVER_SIZE, COVER_SIZE_SMALL, COVER_SPACING,
     CAROUSEL_X, CAROUSEL_CENTER_Y, CONTROLS_X, BTN_SIZE, PLAY_BTN_SIZE, BTN_SPACING,
     CAROUSEL_TOUCH_MARGIN, MAX_SWIPE_JUMP, VELOCITY_THRESHOLDS,
@@ -24,8 +25,9 @@ from .config import (
     POSTHOG_API_KEY, POSTHOG_HOST, ANALYTICS_DISTINCT_ID,
     ANALYTICS_INCLUDE_CONTENT, ANALYTICS_USE_MACHINE_ID,
 )
-from .models import CatalogItem, NowPlaying, LibrespotStatus, MenuState
-from .api import LibrespotAPI, NullLibrespotAPI, CatalogManager
+from .models import CatalogItem, NowPlaying, LibrespotStatus, MenuState, SpotifyPlaylist, SpotifyPlaylistTrack
+from .api import LibrespotAPI, NullLibrespotAPI, CatalogManager, SpotifyLibraryManager
+from .api.spotify_web import SpotifyWebAPI, SpotifyWebAPIError
 from .handlers import TouchHandler, EventListener, EvdevTouchHandler
 from .managers import SleepManager, SmoothCarousel, PlayTimer, PerformanceMonitor, AutoPauseManager, SetupMenu, Settings, UsageTracker, BluetoothManager
 from .controllers import VolumeController, PlaybackController, is_repeatable_spotify_context
@@ -211,6 +213,14 @@ class Mello:
             get_progress_expiry=lambda: self.settings.progress_expiry_hours,
         )
         self.catalog_manager.load()
+        self.spotify_client = None
+        self.spotify_library = None
+        if not self.mock_mode:
+            self.spotify_client = SpotifyWebAPI.from_env_or_json(SPOTIFY_TOKEN_PATH)
+            self.spotify_library = SpotifyLibraryManager(
+                self.spotify_client,
+                SPOTIFY_LIBRARY_CACHE_PATH,
+            )
         
         # UI Components
         self.image_cache = ImageCache(IMAGES_DIR)
@@ -272,6 +282,13 @@ class Mello:
         self._connected = self.mock_mode
         self._connected_lock = threading.Lock()
         self.selected_index = 0
+        self.list_mode_enabled = LIST_MODE_ENABLED
+        self.ui_mode = 'tracks' if self.list_mode_enabled else 'carousel'
+        self._selected_playlist_id: Optional[str] = None
+        self._playlist_scroll_offset: int = 0
+        self._track_scroll_offset: int = 0
+        self._pressed_list_index: Optional[int] = None
+        self._spotify_refresh_in_progress = False
         self._connection_fail_count = 0
         self._connection_grace_threshold = 3
         self._running = threading.Event()
@@ -302,6 +319,8 @@ class Mello:
         self._requested_focus_since: float = 0.0
         self._last_requested_hold_log: float = 0.0
         self._last_title_diag_log: float = 0.0
+        self._last_sync_check_log: float = 0.0
+        self._last_play_skip_log: float = 0.0
         self._last_status_ok_at: float = 0.0
         # True when status is temporarily unknown (timeout/error). While unknown
         # we keep the last known now_playing snapshot and block auto-retrigger.
@@ -354,7 +373,7 @@ class Mello:
         
         # Performance logging
         self._last_fps_log = time.time()
-        self._fps_log_interval = 30  # Log FPS every 30 seconds
+        self._fps_log_interval = 120  # Log steady-state FPS every 2 minutes
         
         # Bluetooth manager
         self.bluetooth = BluetoothManager(
@@ -384,6 +403,8 @@ class Mello:
         
         # Initialize carousel
         self._update_carousel_max_index()
+        if self.list_mode_enabled:
+            self._refresh_spotify_library()
     
     def _load_icons(self) -> dict:
         """Load icon images."""
@@ -409,6 +430,183 @@ class Mello:
             except Exception as e:
                 logger.warning(f'Failed to load icon {filename}: {e}', exc_info=True)
         return icons
+
+    def _spotify_library_ready(self) -> bool:
+        """True when Spotify library/cache objects are available."""
+        return self.spotify_client is not None and self.spotify_library is not None
+
+    def _list_mode_active(self) -> bool:
+        """True when the family station list UI should own input/drawing."""
+        return bool(
+            getattr(self, 'list_mode_enabled', False)
+            and getattr(self, 'ui_mode', 'carousel') in ('playlists', 'tracks')
+        )
+
+    def _playlist_catalog_items(self) -> List[CatalogItem]:
+        """Return Spotify library playlists as renderer-friendly rows."""
+        if not self.spotify_library:
+            return []
+        return [
+            CatalogItem(
+                id=playlist.id,
+                uri=playlist.uri,
+                name=playlist.name,
+                type='playlist',
+                artist=playlist.owner_name or f'{playlist.track_count} tracks',
+                image=playlist.image,
+            )
+            for playlist in self.spotify_library.playlists
+        ]
+
+    def _selected_spotify_playlist(self) -> Optional[SpotifyPlaylist]:
+        """Current selected Spotify library playlist for track list mode."""
+        if not self.spotify_library:
+            return None
+        playlists = self.spotify_library.playlists
+        if self._selected_playlist_id:
+            for playlist in playlists:
+                if playlist.id == self._selected_playlist_id:
+                    return playlist
+        context_uri = self.now_playing.context_uri
+        if context_uri:
+            for playlist in playlists:
+                if playlist.uri == context_uri:
+                    self._selected_playlist_id = playlist.id
+                    return playlist
+        return playlists[0] if playlists else None
+
+    def _selected_playlist_tracks(self) -> List[SpotifyPlaylistTrack]:
+        """Cached tracks for the current selected playlist."""
+        playlist = self._selected_spotify_playlist()
+        if not playlist or not self.spotify_library:
+            return []
+        return self.spotify_library.tracks_for_playlist(playlist.id)
+
+    @staticmethod
+    def _track_render_row(track: SpotifyPlaylistTrack) -> dict:
+        """Renderer-friendly track row."""
+        return {
+            'uri': track.uri,
+            'name': track.name,
+            'artist': track.artist or '',
+            'image': track.image,
+        }
+
+    def _refresh_spotify_library(self):
+        """Refresh Spotify playlists/tracks in the background when auth exists."""
+        if not self._spotify_library_ready() or not self.spotify_client.token:
+            self._show_toast('Spotify setup needed')
+            return
+        if self._spotify_refresh_in_progress:
+            return
+
+        def _refresh():
+            self._spotify_refresh_in_progress = True
+            try:
+                playlists = self.spotify_library.refresh_playlists()
+                playlist = self._selected_spotify_playlist() or (playlists[0] if playlists else None)
+                if playlist:
+                    self._selected_playlist_id = playlist.id
+                    self.spotify_library.refresh_playlist_tracks(playlist.id)
+                logger.info(f'Spotify library refreshed | playlists={len(playlists)}')
+                self.renderer.invalidate()
+            except Exception as e:
+                logger.warning(f'Spotify library refresh failed: {e}')
+                self._show_toast('Spotify unavailable')
+            finally:
+                self._spotify_refresh_in_progress = False
+
+        run_async(_refresh)
+
+    def _enter_playlist_list(self):
+        """Open playlist switcher list."""
+        if not self.list_mode_enabled:
+            self.list_mode_enabled = True
+        self.ui_mode = 'playlists'
+        self._pressed_list_index = None
+        self._refresh_spotify_library()
+        self.renderer.invalidate()
+
+    def _enter_track_list(self, playlist_id: Optional[str] = None):
+        """Open track list for a selected playlist."""
+        if not self.list_mode_enabled:
+            self.list_mode_enabled = True
+        if playlist_id:
+            self._selected_playlist_id = playlist_id
+        self.ui_mode = 'tracks'
+        self._pressed_list_index = None
+        playlist = self._selected_spotify_playlist()
+        if playlist and self._spotify_library_ready() and self.spotify_client.token:
+            run_async(self._refresh_selected_playlist_tracks, playlist.id)
+        self.renderer.invalidate()
+
+    def _refresh_selected_playlist_tracks(self, playlist_id: str):
+        try:
+            tracks = self.spotify_library.refresh_playlist_tracks(playlist_id)
+            logger.info(f'Spotify playlist tracks refreshed | playlist={playlist_id} tracks={len(tracks)}')
+            self.renderer.invalidate()
+        except Exception as e:
+            logger.warning(f'Spotify playlist track refresh failed: {e}')
+            self._show_toast('Tracks unavailable')
+
+    def _exit_list_mode(self):
+        """Return to the legacy carousel UI."""
+        self.ui_mode = 'carousel'
+        self._pressed_list_index = None
+        self.renderer.invalidate()
+
+    def _spotify_device_id(self) -> Optional[str]:
+        """Best-effort Spotify Connect device ID for Mello."""
+        try:
+            status = self.api.status()
+            if isinstance(status, dict) and status.get('device_id'):
+                return status['device_id']
+        except Exception:
+            pass
+        if self.spotify_client and self.spotify_client.token:
+            try:
+                for device in self.spotify_client.available_devices():
+                    name = (device.get('name') or '').lower()
+                    if name == 'mello' or device.get('is_active'):
+                        return device.get('id')
+            except Exception as e:
+                logger.debug(f'Spotify device lookup failed: {e}')
+        return None
+
+    def _play_spotify_track(self, playlist: SpotifyPlaylist, track: SpotifyPlaylistTrack):
+        """Play a selected playlist track, preferring Spotify Web API targeting."""
+        if not track.is_playable:
+            self._show_toast('Track unavailable')
+            return
+        self._user_activated_playback = True
+        self._clear_manual_pause_lock('track_list_tap')
+        self.volume.unmute()
+        self.playback.play_state.start_loading()
+        self.renderer.invalidate()
+
+        def _play():
+            device_id = self._spotify_device_id()
+            if self.spotify_client and self.spotify_client.token and device_id:
+                try:
+                    self.spotify_client.transfer_playback(device_id, play=False)
+                    self.spotify_client.start_playlist_track_on_device(
+                        playlist_uri=playlist.uri,
+                        track_uri=track.uri,
+                        device_id=device_id,
+                    )
+                    self._last_play_commit_uri = playlist.uri
+                    self._last_play_commit_at = time.time()
+                    return
+                except SpotifyWebAPIError as e:
+                    logger.warning(f'Spotify Web API track play failed, falling back: {e}')
+
+            result = self.api.play(playlist.uri, skip_to_uri=track.uri)
+            if result is None:
+                self._show_toast('Connect Spotify to Mello')
+            elif not result:
+                self._show_toast('Could not play track')
+
+        run_async(_play)
     
     def _show_toast(self, message: str):
         """Show a brief toast message on screen."""
@@ -1325,8 +1523,20 @@ class Mello:
     def _handle_key(self, key):
         """Handle keyboard input."""
         self._user_activated_playback = True
+        if self._list_mode_active():
+            if key == pygame.K_ESCAPE:
+                self._exit_list_mode()
+            elif key == pygame.K_BACKSPACE:
+                self._enter_playlist_list()
+            elif key == pygame.K_r:
+                self._refresh_spotify_library()
+            elif key == pygame.K_l:
+                self._enter_playlist_list()
+            return
         if key == pygame.K_ESCAPE:
             self.running = False
+        elif key == pygame.K_l:
+            self._enter_playlist_list()
         elif key == pygame.K_LEFT:
             self._navigate(-1)
         elif key == pygame.K_RIGHT:
@@ -1345,6 +1555,10 @@ class Mello:
         if self.setup_menu.is_open:
             self._menu_touch_start = pos
             self._menu_touch_scrolled = False
+            return
+
+        if self._list_mode_active():
+            self._handle_list_tap(pos)
             return
         
         x, y = pos
@@ -1404,8 +1618,45 @@ class Mello:
         if not rect:
             return False
         x, y = pos
+        if hasattr(rect, 'collidepoint'):
+            return bool(rect.collidepoint(x, y))
         bx, by, bw, bh = rect
         return bx <= x <= bx + bw and by <= y <= by + bh
+
+    def _handle_list_tap(self, pos):
+        """Handle playlist/track list taps without carousel fallthrough."""
+        now = time.time()
+        if now - self._last_action_time < ACTION_DEBOUNCE:
+            return
+        self._last_action_time = now
+
+        if self.ui_mode == 'playlists':
+            if self._point_in_rect(pos, self.renderer.playlist_back_rect):
+                self._enter_track_list()
+                return
+            if self._point_in_rect(pos, self.renderer.playlist_settings_rect):
+                self.setup_menu.open()
+                return
+            playlists = self._playlist_catalog_items()
+            for index, rect in enumerate(getattr(self.renderer, 'playlist_row_rects', [])):
+                if self._point_in_rect(pos, rect) and index < len(playlists):
+                    self._pressed_list_index = index
+                    self._enter_track_list(playlists[index].id)
+                    return
+            return
+
+        if self.ui_mode == 'tracks':
+            if self._point_in_rect(pos, self.renderer.track_back_rect):
+                self._enter_playlist_list()
+                return
+            playlist = self._selected_spotify_playlist()
+            tracks = self._selected_playlist_tracks()
+            for index, rect in enumerate(getattr(self.renderer, 'track_row_rects', [])):
+                if self._point_in_rect(pos, rect) and index < len(tracks):
+                    self._pressed_list_index = index
+                    if playlist:
+                        self._play_spotify_track(playlist, tracks[index])
+                    return
 
     def _delete_fallback_rect(self) -> tuple:
         """Expected delete overlay hit rect for the centered cover.
@@ -1643,9 +1894,10 @@ class Mello:
         )
 
     def _skip_track(self, api_fn):
-        """Save progress, mark as user action, then skip prev/next."""
+        """Save progress, unmute, mark as user action, then skip prev/next."""
         self.playback.last_user_play_time = time.time()
         self.playback.save_progress(self.now_playing, force=True)
+        self.volume.unmute()
 
         def _do_skip():
             if not api_fn():
@@ -1668,7 +1920,7 @@ class Mello:
         items = self.display_items
         if self.now_playing.paused and items and self.selected_index < len(items):
             focused_item = items[self.selected_index]
-            if not focused_item.is_temp:
+            if not focused_item.is_temp and self.now_playing.context_uri != focused_item.uri:
                 logger.info(
                     'Paused state: forcing focused context play '
                     f'(focused={focused_item.uri[:40]}, paused_ctx={(self.now_playing.context_uri or "none")[:40]})'
@@ -1753,7 +2005,7 @@ class Mello:
     def _log_sleep_wait_if_due(self):
         """Log periodic sleeping heartbeat so black-screen reports have context."""
         now = time.time()
-        if now - self._last_sleep_wait_log < 60:
+        if now - self._last_sleep_wait_log < 300:
             return
         self._last_sleep_wait_log = now
         logger.info(
@@ -1963,10 +2215,13 @@ class Mello:
 
         focused = items[self.selected_index].name if self.selected_index < len(items) else '?'
         focused_uri = items[self.selected_index].uri if self.selected_index < len(items) else None
-        logger.info(
-            f'SYNC check | spotify={context_uri[:40]} | focused="{focused}" '
-            f'| driving={self._user_driving} | epoch={self._focus_epoch}'
-        )
+        now = time.time()
+        if now - getattr(self, '_last_sync_check_log', 0.0) > 10.0:
+            logger.info(
+                f'SYNC check | spotify={context_uri[:40]} | focused="{focused}" '
+                f'| driving={self._user_driving} | epoch={self._focus_epoch}'
+            )
+            self._last_sync_check_log = now
 
         if focused_uri == context_uri:
             self._pending_external_focus_uri = None
@@ -2075,10 +2330,13 @@ class Mello:
                 self._requested_focus_since = 0.0
                 self.volume.unmute()
             elif self._is_paused_same_focus_context(focused_item):
-                logger.info(
-                    'PLAY skip | paused on focused context, no auto resume '
-                    f'(ctx={(self.now_playing.context_uri or "none")[:40]})'
-                )
+                now = time.time()
+                if now - getattr(self, '_last_play_skip_log', 0.0) > 5.0:
+                    logger.info(
+                        'PLAY skip | paused on focused context, no auto resume '
+                        f'(ctx={(self.now_playing.context_uri or "none")[:40]})'
+                    )
+                    self._last_play_skip_log = now
                 self._reset_pending_focus('paused_same_focus_context')
                 self._requested_focus_epoch = None
                 self._requested_focus_uri = None
@@ -2140,7 +2398,7 @@ class Mello:
                     f'focused_item={focused_item.name if focused_item else None}, '
                     f'is_temp={focused_item.is_temp if focused_item else None}'
                 )
-                logger.warning(f'PLAY gate blocked | {reason}')
+                logger.info(f'PLAY gate blocked | {reason}')
                 self._last_focus_gate_log = now
             elif self._startup_ready and self.connected and (
                 self._status_unknown or (now - self._last_status_ok_at) >= 4.0
@@ -2317,7 +2575,7 @@ class Mello:
         now = time.time()
         if now - self._last_title_diag_log > 2.0 and focused_item is not None:
             title_source, title_text = self._display_title_for_item(focused_item)
-            logger.warning(
+            logger.debug(
                 'TITLE diag | '
                 f'focused="{focused_item.name}" | title="{title_text}" | source={title_source} | '
                 f'focused_uri={(focused_item.uri or "none")[:40]} | spotify_ctx={(self.now_playing.context_uri or "none")[:40]} | '
@@ -2355,6 +2613,9 @@ class Mello:
     
     def _draw(self):
         """Draw the UI."""
+        if self._list_mode_active() and not self.setup_menu.is_open:
+            return self._draw_list_mode()
+
         items = self.display_items
         np = self.now_playing
         focused_item = items[self.selected_index] if self.selected_index < len(items) else None
@@ -2418,3 +2679,41 @@ class Mello:
         elif not self.delete_mode_id:
             self._delete_button_rect = None
         return dirty_rects
+
+    def _draw_list_mode(self):
+        """Draw the family station playlist/track list UI."""
+        np = self.now_playing
+        if self.ui_mode == 'playlists':
+            playlists = self._playlist_catalog_items()
+            self.renderer.draw_playlist_list(
+                playlists,
+                current_uri=np.context_uri,
+                scroll_offset=self._playlist_scroll_offset,
+                pressed_index=self._pressed_list_index,
+                show_back=True,
+                show_settings=False,
+            )
+            return None
+
+        playlist = self._selected_spotify_playlist()
+        playlist_item = (
+            CatalogItem(
+                id=playlist.id,
+                uri=playlist.uri,
+                name=playlist.name,
+                type='playlist',
+                artist=playlist.owner_name,
+                image=playlist.image,
+            )
+            if playlist else None
+        )
+        tracks = [self._track_render_row(track) for track in self._selected_playlist_tracks()]
+        self.renderer.draw_track_list(
+            playlist_item,
+            tracks,
+            np,
+            current_track_uri=np.track_uri,
+            scroll_offset=self._track_scroll_offset,
+            pressed_index=self._pressed_list_index,
+        )
+        return None

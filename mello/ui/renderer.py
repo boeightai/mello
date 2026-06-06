@@ -64,6 +64,11 @@ class Renderer:
         self.add_button_rect: Optional[Tuple[int, int, int, int]] = None
         self.delete_button_rect: Optional[Tuple[int, int, int, int]] = None
         self.settings_button_rect: Optional[Tuple[int, int, int, int]] = None
+        self.playlist_row_rects: List[Optional[pygame.Rect]] = []
+        self.track_row_rects: List[Optional[pygame.Rect]] = []
+        self.playlist_back_rect: Optional[pygame.Rect] = None
+        self.playlist_settings_rect: Optional[pygame.Rect] = None
+        self.track_back_rect: Optional[pygame.Rect] = None
         
         # Menu button rects (updated when menu is drawn)
         self.menu_button_rects: Dict[str, pygame.Rect] = {}
@@ -73,6 +78,14 @@ class Renderer:
         header_fade_size = SCREEN_WIDTH - 615  # 105px, starts just above first button top
         raw = self._build_fade_surface(header_fade_size)
         self._menu_header_fade = pygame.transform.flip(raw, True, False)
+
+    def _clear_list_hit_rects(self):
+        """Clear list-mode hit rectangles."""
+        self.playlist_row_rects = []
+        self.track_row_rects = []
+        self.playlist_back_rect = None
+        self.playlist_settings_rect = None
+        self.track_back_rect = None
     
     @staticmethod
     def _build_fade_surface(size: int) -> pygame.Surface:
@@ -124,6 +137,7 @@ class Renderer:
         
         # Menu overlay — draw full scene then overlay on top
         if ctx.menu_state != MenuState.CLOSED:
+            self._clear_list_hit_rects()
             self.add_button_rect = None
             self.delete_button_rect = None
             self.settings_button_rect = None
@@ -131,6 +145,7 @@ class Renderer:
             return None
 
         # Clear button hit rects
+        self._clear_list_hit_rects()
         self.add_button_rect = None
         self.delete_button_rect = None
         self.settings_button_rect = None
@@ -634,6 +649,210 @@ class Renderer:
         # Center on carousel area
         rect = rotated.get_rect(center=(CAROUSEL_X + COVER_SIZE // 2, CAROUSEL_CENTER_Y))
         self.screen.blit(rotated, rect)
+
+    # ============================================
+    # LIST MODE
+    # ============================================
+
+    # Physical portrait panel is rotated for the user. Rows stack downward in
+    # user-space by moving toward smaller physical X values.
+    _LIST_TITLE_X = 670
+    _LIST_NAV_SIZE = 64
+    _LIST_NAV_CENTER = (670, 50)
+    _LIST_SETTINGS_CENTER = (670, 1230)
+    _LIST_ROW_X = 560
+    _LIST_ROW_Y = 80
+    _LIST_ROW_H = 82
+    _LIST_ROW_W = 1120
+    _LIST_ROW_GAP = 10
+    _LIST_ROW_RADIUS = 14
+    _LIST_THUMB_SIZE = 58
+    _LIST_TEXT_LEFT = 170
+    _LIST_TEXT_RIGHT = 50
+
+    def _truncate_text(self, text: Optional[str], font, max_width: int) -> str:
+        """Trim text so its unrotated width fits after portrait rotation."""
+        text = (text or '').strip()
+        if not text:
+            return ''
+        if font.size(text)[0] <= max_width:
+            return text
+
+        suffix = '...'
+        max_body_width = max(0, max_width - font.size(suffix)[0])
+        trimmed = text
+        while trimmed and font.size(trimmed)[0] > max_body_width:
+            trimmed = trimmed[:-1].rstrip()
+        return (trimmed or text[:1]) + suffix
+
+    def _list_text_max_width(self) -> int:
+        """Width available for one rotated text line inside a list row."""
+        return self._LIST_ROW_W - self._LIST_TEXT_LEFT - self._LIST_TEXT_RIGHT
+
+    def _draw_list_title(self, title: str):
+        display = self._truncate_text(title, self.font_large, SCREEN_HEIGHT - 180)
+        title_surf = self._render_text_rotated(display, self.font_large, COLORS['text_primary'])
+        self.screen.blit(title_surf, title_surf.get_rect(center=(self._LIST_TITLE_X, CAROUSEL_CENTER_Y)))
+
+    def _draw_list_nav_button(self, icon_name: str, center: tuple, pressed: bool = False) -> pygame.Rect:
+        nav_r = self._LIST_NAV_SIZE // 2
+        nav_color = self._lighten_color(COLORS['bg_elevated']) if pressed else COLORS['bg_elevated']
+        draw_aa_circle(self.screen, nav_color, center, nav_r)
+        icon = self.icons.get(icon_name)
+        if icon:
+            icon_sz = 34
+            scaled = pygame.transform.smoothscale(icon, (icon_sz, icon_sz))
+            self.screen.blit(scaled, scaled.get_rect(center=center))
+        return pygame.Rect(center[0] - nav_r, center[1] - nav_r, self._LIST_NAV_SIZE, self._LIST_NAV_SIZE)
+
+    def _draw_list_empty_state(self, message: str):
+        empty_surf = self._render_text_rotated(message, self.font_medium, COLORS['text_secondary'])
+        center = (self._LIST_ROW_X - self._LIST_ROW_H, CAROUSEL_CENTER_Y)
+        self.screen.blit(empty_surf, empty_surf.get_rect(center=center))
+
+    def _draw_list_thumbnail(self, rect: pygame.Rect, image: Optional[str]):
+        thumb_rect = pygame.Rect(
+            rect.centerx - self._LIST_THUMB_SIZE // 2,
+            rect.y + 26,
+            self._LIST_THUMB_SIZE,
+            self._LIST_THUMB_SIZE,
+        )
+        if image:
+            cover = self.image_cache.get(image, self._LIST_THUMB_SIZE)
+            self.screen.blit(cover, thumb_rect)
+        else:
+            pygame.draw.rect(self.screen, COLORS['bg_secondary'], thumb_rect, border_radius=10)
+
+    def _draw_list_row(self, rect: pygame.Rect, title: str, subtitle: str = '',
+                       image: Optional[str] = None, highlighted: bool = False,
+                       pressed: bool = False):
+        bg_color = COLORS['accent'] if highlighted else COLORS['bg_elevated']
+        if pressed:
+            bg_color = self._lighten_color(bg_color)
+        pygame.draw.rect(self.screen, bg_color, rect, border_radius=self._LIST_ROW_RADIUS)
+
+        self._draw_list_thumbnail(rect, image)
+
+        max_text_width = self._list_text_max_width()
+        title_display = self._truncate_text(title, self.font_medium, max_text_width)
+        title_surf = self._render_text_rotated(title_display, self.font_medium, COLORS['text_primary'])
+
+        if subtitle:
+            subtitle_display = self._truncate_text(subtitle, self.font_small, max_text_width)
+            subtitle_surf = self._render_text_rotated(subtitle_display, self.font_small, COLORS['text_secondary'])
+            self.screen.blit(title_surf, title_surf.get_rect(center=(rect.centerx + 14, rect.y + 640)))
+            self.screen.blit(subtitle_surf, subtitle_surf.get_rect(center=(rect.centerx - 18, rect.y + 640)))
+        else:
+            self.screen.blit(title_surf, title_surf.get_rect(center=(rect.centerx, rect.y + 640)))
+
+    def _visible_list_rows(self, count: int, scroll_offset: int = 0) -> List[Tuple[int, pygame.Rect]]:
+        rects: List[Tuple[int, pygame.Rect]] = []
+        row_step = self._LIST_ROW_H + self._LIST_ROW_GAP
+        for i in range(count):
+            x = self._LIST_ROW_X - i * row_step + scroll_offset
+            rect = pygame.Rect(x, self._LIST_ROW_Y, self._LIST_ROW_H, self._LIST_ROW_W)
+            if rect.right < 20 or rect.left > self._LIST_ROW_X + self._LIST_ROW_H:
+                continue
+            rects.append((i, rect))
+        return rects
+
+    def _track_from_row(self, row: dict) -> Tuple[str, str, Optional[str], Optional[str]]:
+        track = row.get('track') if isinstance(row.get('track'), dict) else row
+        name = track.get('name') or row.get('name') or 'Unknown track'
+        uri = track.get('uri') or row.get('uri')
+
+        artist = track.get('artist') or row.get('artist') or ''
+        artists = track.get('artists') or row.get('artists') or []
+        if not artist and isinstance(artists, list):
+            artist_names = [a.get('name') for a in artists if isinstance(a, dict) and a.get('name')]
+            artist = ', '.join(artist_names)
+
+        image = track.get('image') or row.get('image')
+        album = track.get('album') if isinstance(track.get('album'), dict) else {}
+        images = album.get('images') if isinstance(album, dict) else None
+        if not image and isinstance(images, list) and images:
+            first = images[0]
+            if isinstance(first, dict):
+                image = first.get('url')
+            elif isinstance(first, str):
+                image = first
+
+        return name, artist, uri, image
+
+    def draw_playlist_list(self, playlists: List[CatalogItem], current_uri: Optional[str] = None,
+                           scroll_offset: int = 0, pressed_index: Optional[int] = None,
+                           title: str = 'Playlists', show_back: bool = False,
+                           show_settings: bool = False) -> None:
+        """Draw playlist selection list and populate playlist hit rectangles."""
+        self._draw_background()
+        self._clear_list_hit_rects()
+        self.add_button_rect = None
+        self.delete_button_rect = None
+        self.settings_button_rect = None
+
+        self._draw_list_title(title)
+        if show_back:
+            self.playlist_back_rect = self._draw_list_nav_button('back', self._LIST_NAV_CENTER)
+        if show_settings and self.icons.get('settings'):
+            self.playlist_settings_rect = self._draw_list_nav_button(
+                'settings',
+                self._LIST_SETTINGS_CENTER,
+                pressed=False,
+            )
+
+        if not playlists:
+            self._draw_list_empty_state('No playlists')
+            return None
+
+        self.playlist_row_rects = [None] * len(playlists)
+
+        for index, rect in self._visible_list_rows(len(playlists), scroll_offset):
+            self.playlist_row_rects[index] = rect
+            playlist = playlists[index]
+            self._draw_list_row(
+                rect,
+                playlist.name,
+                playlist.artist or '',
+                playlist.image,
+                highlighted=bool(current_uri and playlist.uri == current_uri),
+                pressed=index == pressed_index,
+            )
+        return None
+
+    def draw_track_list(self, playlist: Optional[CatalogItem], tracks: List[dict],
+                        now_playing: NowPlaying, current_track_uri: Optional[str] = None,
+                        scroll_offset: int = 0, pressed_index: Optional[int] = None,
+                        title: Optional[str] = None) -> None:
+        """Draw tracks for a playlist and populate track hit rectangles."""
+        self._draw_background()
+        self._clear_list_hit_rects()
+        self.add_button_rect = None
+        self.delete_button_rect = None
+        self.settings_button_rect = None
+
+        title_text = title or (playlist.name if playlist else 'Tracks')
+        self._draw_list_title(title_text)
+        self.track_back_rect = self._draw_list_nav_button('back', self._LIST_NAV_CENTER)
+
+        if not tracks:
+            self._draw_list_empty_state('No tracks')
+            return None
+
+        active_uri = current_track_uri or now_playing.track_uri
+        self.track_row_rects = [None] * len(tracks)
+
+        for index, rect in self._visible_list_rows(len(tracks), scroll_offset):
+            self.track_row_rects[index] = rect
+            name, artist, uri, image = self._track_from_row(tracks[index])
+            self._draw_list_row(
+                rect,
+                name,
+                artist,
+                image,
+                highlighted=bool(active_uri and uri == active_uri),
+                pressed=index == pressed_index,
+            )
+        return None
     
     # ============================================
     # SETUP MENU
@@ -910,4 +1129,3 @@ class Renderer:
         pygame.draw.rect(self.screen, bg_color, rect, border_radius=18)
         text_surf = self._render_text_rotated(label, self.font_medium, text_color)
         self.screen.blit(text_surf, text_surf.get_rect(center=rect.center))
-

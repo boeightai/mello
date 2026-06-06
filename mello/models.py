@@ -2,7 +2,7 @@
 Mello Data Models - Core data structures.
 """
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional, List, Literal
 
@@ -76,6 +76,240 @@ class CatalogItem:
     images: Optional[List[str]] = None  # For playlist composite covers
     current_track: Optional[dict] = None
     is_temp: bool = False
+
+
+@dataclass
+class SpotifyPlaylist:
+    """Typed playlist data returned by the Spotify library cache."""
+    id: str
+    uri: str
+    name: str
+    track_count: int = 0
+    image: Optional[str] = None
+    owner_name: Optional[str] = None
+    snapshot_id: Optional[str] = None
+    description: Optional[str] = None
+    public: Optional[bool] = None
+
+    @classmethod
+    def from_api(cls, data: dict) -> Optional['SpotifyPlaylist']:
+        """Parse a Spotify Web API playlist payload."""
+        if not isinstance(data, dict):
+            return None
+
+        playlist_id = str(data.get('id') or '')
+        uri = str(data.get('uri') or (f'spotify:playlist:{playlist_id}' if playlist_id else ''))
+        name = str(data.get('name') or '')
+        if not playlist_id or not uri or not name:
+            return None
+
+        images = data.get('images') if isinstance(data.get('images'), list) else []
+        image = next(
+            (img.get('url') for img in images if isinstance(img, dict) and img.get('url')),
+            None,
+        )
+
+        tracks = data.get('tracks') if isinstance(data.get('tracks'), dict) else {}
+        try:
+            track_count = int(tracks.get('total') or 0)
+        except (TypeError, ValueError):
+            track_count = 0
+
+        owner = data.get('owner') if isinstance(data.get('owner'), dict) else {}
+
+        return cls(
+            id=playlist_id,
+            uri=uri,
+            name=name,
+            track_count=track_count,
+            image=image,
+            owner_name=owner.get('display_name'),
+            snapshot_id=data.get('snapshot_id'),
+            description=data.get('description'),
+            public=data.get('public') if isinstance(data.get('public'), bool) else None,
+        )
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Optional['SpotifyPlaylist']:
+        """Parse cached playlist data."""
+        if not isinstance(data, dict):
+            return None
+        playlist_id = str(data.get('id') or '')
+        uri = str(data.get('uri') or '')
+        name = str(data.get('name') or '')
+        if not playlist_id or not uri or not name:
+            return None
+        try:
+            track_count = int(data.get('track_count') or 0)
+        except (TypeError, ValueError):
+            track_count = 0
+        return cls(
+            id=playlist_id,
+            uri=uri,
+            name=name,
+            track_count=track_count,
+            image=data.get('image'),
+            owner_name=data.get('owner_name'),
+            snapshot_id=data.get('snapshot_id'),
+            description=data.get('description'),
+            public=data.get('public') if isinstance(data.get('public'), bool) else None,
+        )
+
+    def to_dict(self) -> dict:
+        """Serialize playlist data for cache storage."""
+        return {
+            'id': self.id,
+            'uri': self.uri,
+            'name': self.name,
+            'track_count': self.track_count,
+            'image': self.image,
+            'owner_name': self.owner_name,
+            'snapshot_id': self.snapshot_id,
+            'description': self.description,
+            'public': self.public,
+        }
+
+
+@dataclass
+class SpotifyPlaylistTrack:
+    """Typed playlist track data returned by the Spotify library cache."""
+    id: Optional[str]
+    uri: str
+    name: str
+    artists: List[str] = field(default_factory=list)
+    album: Optional[str] = None
+    duration_ms: int = 0
+    image: Optional[str] = None
+    position: int = 0
+    added_at: Optional[str] = None
+    added_by: Optional[str] = None
+    is_local: bool = False
+    is_playable: bool = True
+    unavailable_reason: Optional[str] = None
+
+    @property
+    def artist(self) -> Optional[str]:
+        """Artist names joined for UI display."""
+        return ', '.join(self.artists) if self.artists else None
+
+    @classmethod
+    def from_api_item(cls, item: dict, position: int = 0) -> Optional['SpotifyPlaylistTrack']:
+        """Parse a Spotify Web API playlist item row."""
+        if not isinstance(item, dict):
+            return None
+
+        track = item.get('track')
+        if not isinstance(track, dict):
+            return None
+        if track.get('type') and track.get('type') != 'track':
+            return None
+
+        is_local = bool(track.get('is_local'))
+        uri = str(track.get('uri') or '')
+        name = str(track.get('name') or '')
+        if not uri or not name:
+            return None
+
+        artists_data = track.get('artists') if isinstance(track.get('artists'), list) else []
+        artists = [
+            str(artist.get('name'))
+            for artist in artists_data
+            if isinstance(artist, dict) and artist.get('name')
+        ]
+
+        album_data = track.get('album') if isinstance(track.get('album'), dict) else {}
+        images = album_data.get('images') if isinstance(album_data.get('images'), list) else []
+        image = next(
+            (img.get('url') for img in images if isinstance(img, dict) and img.get('url')),
+            None,
+        )
+
+        try:
+            duration_ms = int(track.get('duration_ms') or 0)
+        except (TypeError, ValueError):
+            duration_ms = 0
+
+        restrictions = track.get('restrictions') if isinstance(track.get('restrictions'), dict) else {}
+        is_playable = track.get('is_playable')
+        if is_playable is None:
+            is_playable = not is_local and not restrictions
+        is_playable = bool(is_playable) and not is_local
+
+        unavailable_reason = None
+        if is_local:
+            unavailable_reason = 'local'
+        elif not is_playable:
+            unavailable_reason = restrictions.get('reason') or 'unavailable'
+
+        added_by = item.get('added_by') if isinstance(item.get('added_by'), dict) else {}
+
+        return cls(
+            id=track.get('id'),
+            uri=uri,
+            name=name,
+            artists=artists,
+            album=album_data.get('name'),
+            duration_ms=duration_ms,
+            image=image,
+            position=position,
+            added_at=item.get('added_at'),
+            added_by=added_by.get('id'),
+            is_local=is_local,
+            is_playable=is_playable,
+            unavailable_reason=unavailable_reason,
+        )
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Optional['SpotifyPlaylistTrack']:
+        """Parse cached playlist track data."""
+        if not isinstance(data, dict):
+            return None
+        uri = str(data.get('uri') or '')
+        name = str(data.get('name') or '')
+        if not uri or not name:
+            return None
+        artists = data.get('artists') if isinstance(data.get('artists'), list) else []
+        try:
+            duration_ms = int(data.get('duration_ms') or 0)
+        except (TypeError, ValueError):
+            duration_ms = 0
+        try:
+            position = int(data.get('position') or 0)
+        except (TypeError, ValueError):
+            position = 0
+        return cls(
+            id=data.get('id'),
+            uri=uri,
+            name=name,
+            artists=[str(artist) for artist in artists],
+            album=data.get('album'),
+            duration_ms=duration_ms,
+            image=data.get('image'),
+            position=position,
+            added_at=data.get('added_at'),
+            added_by=data.get('added_by'),
+            is_local=bool(data.get('is_local', False)),
+            is_playable=bool(data.get('is_playable', True)),
+            unavailable_reason=data.get('unavailable_reason'),
+        )
+
+    def to_dict(self) -> dict:
+        """Serialize track data for cache storage."""
+        return {
+            'id': self.id,
+            'uri': self.uri,
+            'name': self.name,
+            'artists': list(self.artists),
+            'album': self.album,
+            'duration_ms': self.duration_ms,
+            'image': self.image,
+            'position': self.position,
+            'added_at': self.added_at,
+            'added_by': self.added_by,
+            'is_local': self.is_local,
+            'is_playable': self.is_playable,
+            'unavailable_reason': self.unavailable_reason,
+        }
 
 
 @dataclass

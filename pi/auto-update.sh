@@ -52,16 +52,35 @@ if ! flock -n 9; then
   exit 0
 fi
 
-REPO_URL="https://github.com/emieljanson/mello.git"
+REPO_URL="${MELLO_REPO_URL:-https://github.com/boeightai/mello.git}"
+REPO_PATH="boeightai/mello"
+LEGACY_REPO_PATH="emieljanson/mello"
+
+_origin_matches_target() {
+  local origin_url="$1"
+  [ "$origin_url" = "$REPO_URL" ] || printf '%s\n' "$origin_url" | grep -q "$REPO_PATH"
+}
 
 # Ensure we have a healthy git repo.  If .git is missing or fetch fails for
 # non-network reasons (corrupt repo, no remote, manual SCP deploy, etc.),
 # re-clone from scratch while preserving user data.
 _ensure_git_repo() {
-  # Quick health-check: is this a valid git repo with the right remote?
-  if git rev-parse --git-dir >/dev/null 2>&1 \
-     && git remote get-url origin 2>/dev/null | grep -q "emieljanson/mello"; then
-    return 0  # repo looks fine
+  # Quick health-check: is this a valid git repo with the canonical remote?
+  if git rev-parse --git-dir >/dev/null 2>&1; then
+    local origin_url
+    origin_url="$(git remote get-url origin 2>/dev/null || true)"
+    if _origin_matches_target "$origin_url"; then
+      return 0  # repo looks fine
+    fi
+    if [ -z "$origin_url" ] || printf '%s\n' "$origin_url" | grep -q "$LEGACY_REPO_PATH"; then
+      log "Updating origin remote to $REPO_URL"
+      if [ -z "$origin_url" ]; then
+        git remote add origin "$REPO_URL"
+      else
+        git remote set-url origin "$REPO_URL"
+      fi
+      return 0
+    fi
   fi
 
   log "Git repo missing or broken — re-cloning from $REPO_URL"

@@ -43,6 +43,8 @@ DATA_DIR = Path(__file__).parent.parent / 'data'
 CATALOG_PATH = DATA_DIR / 'catalog.json'
 PROGRESS_PATH = DATA_DIR / 'progress.json'
 SETTINGS_PATH = DATA_DIR / 'settings.json'
+SPOTIFY_TOKEN_PATH = DATA_DIR / 'spotify-token.json'
+SPOTIFY_LIBRARY_CACHE_PATH = DATA_DIR / 'spotify-library.json'
 IMAGES_DIR = DATA_DIR / 'images'
 ICONS_DIR = Path(__file__).parent.parent / 'icons'
 LIBRESPOT_STATE_PATH = Path.home() / '.config' / 'go-librespot' / 'state.json'
@@ -59,6 +61,7 @@ LOG_BACKUP_COUNT = 10  # Keep 10 backup files (~50MB total)
 
 MOCK_MODE = '--mock' in sys.argv or '-m' in sys.argv
 FULLSCREEN = '--fullscreen' in sys.argv or '-f' in sys.argv
+LIST_MODE_ENABLED = os.environ.get('MELLO_LIST_MODE', '').lower() in ('1', 'true', 'yes', 'on')
 
 # ============================================
 # COLORS (Design specs from web version)
@@ -198,5 +201,4 @@ ANALYTICS_USE_MACHINE_ID = os.environ.get('ANALYTICS_USE_MACHINE_ID', '0').lower
 PERF_LOG_INTERVAL = 5.0   # Log performance every 5 seconds
 PERF_SAMPLE_SIZE = 60     # Average over 60 frames
 IMAGE_CACHE_MAX_SIZE = 200  # Maximum cached images
-
 

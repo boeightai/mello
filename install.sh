@@ -1,9 +1,11 @@
 #!/bin/bash
 # Mello One-Line Installer
-# Usage: curl -sSL https://raw.githubusercontent.com/emieljanson/mello/main/install.sh | bash
+# Usage: curl -sSL https://raw.githubusercontent.com/boeightai/mello/main/install.sh | bash
 # Options: --no-analytics  Disable anonymous usage data
 
 set -e
+
+REPO_URL="${MELLO_REPO_URL:-https://github.com/boeightai/mello.git}"
 
 # Parse flags to pass through to setup.sh
 SETUP_FLAGS=""
@@ -34,7 +36,7 @@ fi
 
 # Clone repository
 echo "Downloading Mello..."
-git clone https://github.com/emieljanson/mello.git ~/mello
+git clone "$REPO_URL" ~/mello
 
 # Run setup
 echo ""
