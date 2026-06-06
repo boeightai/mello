@@ -2550,7 +2550,7 @@ class Mello:
                     f'| manual_pause_lock={self._manual_pause_lock} | '
                     f'pause_intent_active={self.playback.pause_intent_active}'
                 )
-            logger.info('SYNC ok | focused context already matches Spotify')
+            logger.debug('SYNC ok | focused context already matches Spotify')
             return
 
         if not self.now_playing.playing:
