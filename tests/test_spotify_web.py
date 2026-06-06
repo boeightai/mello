@@ -37,6 +37,11 @@ class FakeResponse:
         return self._payload
 
 
+class FakeNonJsonResponse(FakeResponse):
+    def json(self):
+        raise ValueError("not json")
+
+
 def make_client(token=None, session=None, **kwargs):
     return SpotifyWebAPI(
         token=token or SpotifyToken(access_token="access"),
@@ -216,6 +221,37 @@ def test_start_playlist_track_on_device_puts_expected_body():
     )
 
 
+def test_start_playlist_track_on_device_retries_unsupported_playlist_uri_with_track_uri():
+    session = MagicMock()
+    session.request.side_effect = [
+        FakeResponse(
+            status_code=400,
+            text='{"error":{"message":"Unsupported uri kind: playlist_v2"}}',
+        ),
+        FakeResponse(status_code=204),
+    ]
+    client = make_client(session=session)
+
+    result = client.start_playlist_track_on_device(
+        playlist_uri="spotify:playlist:abc",
+        track_uri="spotify:track:def",
+        device_id="device-1",
+        position_ms=1500,
+    )
+
+    assert result is True
+    assert session.request.call_count == 2
+    retry_call = session.request.call_args_list[1]
+    assert retry_call.args[:2] == (
+        "PUT",
+        "https://api.spotify.com/v1/me/player/play",
+    )
+    assert retry_call.kwargs["json"] == {
+        "uris": ["spotify:track:def"],
+        "position_ms": 1500,
+    }
+
+
 def test_transfer_playback_puts_expected_body():
     session = MagicMock()
     session.request.return_value = FakeResponse(status_code=204)
@@ -338,3 +374,11 @@ def test_pause_playback_targets_device():
         "https://api.spotify.com/v1/me/player/pause",
     )
     assert session.request.call_args.kwargs["params"] == {"device_id": "mello-device"}
+
+
+def test_pause_playback_accepts_successful_non_json_response():
+    session = MagicMock()
+    session.request.return_value = FakeNonJsonResponse(status_code=200, text="ok")
+    client = make_client(session=session)
+
+    assert client.pause_playback(device_id="mello-device") is True

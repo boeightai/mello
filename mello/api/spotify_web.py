@@ -313,10 +313,15 @@ class SpotifyWebAPI:
             timeout=timeout,
             **kwargs,
         )
-        if resp.status_code in (200, 201):
-            return resp.json()
         if resp.status_code == 204:
             return None
+        if resp.status_code in (200, 201):
+            try:
+                return resp.json()
+            except ValueError:
+                # Spotify player commands are specified as 204, but Connect
+                # implementations can return a successful non-JSON body.
+                return None
 
         message = getattr(resp, "text", "") or f"HTTP {resp.status_code}"
         raise SpotifyWebAPIError(f"Spotify Web API {method} {endpoint_or_url} failed: {message}")
@@ -363,16 +368,29 @@ class SpotifyWebAPI:
         position_ms: int = 0,
     ) -> bool:
         """Start a specific playlist track on a Spotify Connect device."""
-        self._request(
-            "PUT",
-            "/me/player/play",
-            params={"device_id": device_id},
-            json={
-                "context_uri": playlist_uri,
-                "offset": {"uri": track_uri},
-                "position_ms": position_ms,
-            },
-        )
+        try:
+            self._request(
+                "PUT",
+                "/me/player/play",
+                params={"device_id": device_id},
+                json={
+                    "context_uri": playlist_uri,
+                    "offset": {"uri": track_uri},
+                    "position_ms": position_ms,
+                },
+            )
+        except SpotifyWebAPIError as exc:
+            if "Unsupported uri kind" not in str(exc):
+                raise
+            self._request(
+                "PUT",
+                "/me/player/play",
+                params={"device_id": device_id},
+                json={
+                    "uris": [track_uri],
+                    "position_ms": position_ms,
+                },
+            )
         return True
 
     def transfer_playback(self, device_id: str, play: bool = False) -> bool:
