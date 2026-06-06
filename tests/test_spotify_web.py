@@ -176,17 +176,17 @@ def test_current_user_playlists_follows_pagination():
 def test_playlist_items_follows_pagination():
     session = MagicMock()
     session.request.side_effect = [
-        FakeResponse(payload={"items": [{"track": {"uri": "spotify:track:1"}}], "next": "/next"}),
-        FakeResponse(payload={"items": [{"track": {"uri": "spotify:track:2"}}], "next": None}),
+        FakeResponse(payload={"items": [{"item": {"uri": "spotify:track:1"}}], "next": "/next"}),
+        FakeResponse(payload={"items": [{"item": {"uri": "spotify:track:2"}}], "next": None}),
     ]
     client = make_client(session=session)
 
     items = client.playlist_items("playlist-id", limit=2)
 
-    assert [item["track"]["uri"] for item in items] == ["spotify:track:1", "spotify:track:2"]
+    assert [item["item"]["uri"] for item in items] == ["spotify:track:1", "spotify:track:2"]
     first_call = session.request.call_args_list[0]
-    assert first_call.args[1] == "https://api.spotify.com/v1/playlists/playlist-id/tracks"
-    assert first_call.kwargs["params"] == {"limit": 2}
+    assert first_call.args[1] == "https://api.spotify.com/v1/playlists/playlist-id/items"
+    assert first_call.kwargs["params"] == {"limit": 2, "additional_types": "track"}
 
 
 def test_start_playlist_track_on_device_puts_expected_body():

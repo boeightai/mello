@@ -198,7 +198,7 @@ class SpotifyPlaylistTrack:
         if not isinstance(item, dict):
             return None
 
-        track = item.get('track')
+        track = item.get('item') or item.get('track')
         if not isinstance(track, dict):
             return None
         if track.get('type') and track.get('type') != 'track':

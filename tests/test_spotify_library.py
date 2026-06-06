@@ -131,6 +131,18 @@ def test_missing_track_rows_are_skipped_without_breaking_order(tmp_path):
     assert [track.position for track in tracks] == [1, 3]
 
 
+def test_playlist_items_new_shape_uses_item_field(tmp_path):
+    new_shape = track_item('t1', 'One')
+    new_shape['item'] = new_shape.pop('track')
+    client = FakeSpotifyWebAPI(track_pages={'p1': [[new_shape]]})
+    manager = SpotifyLibraryManager(client, tmp_path / 'spotify-library.json')
+
+    tracks = manager.refresh_playlist_tracks('p1')
+
+    assert [track.name for track in tracks] == ['One']
+    assert [track.uri for track in tracks] == ['spotify:track:t1']
+
+
 def test_unavailable_and_local_tracks_are_flagged_gracefully(tmp_path):
     unavailable = track_item('blocked', 'Blocked', playable=False)
     unavailable['track']['restrictions'] = {'reason': 'market'}

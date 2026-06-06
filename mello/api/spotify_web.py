@@ -346,8 +346,8 @@ class SpotifyWebAPI:
 
     def playlist_items(self, playlist_id: str, limit: int = 100) -> List[dict]:
         """Return all playlist item rows by following Spotify pagination."""
-        endpoint = f"/playlists/{playlist_id}/tracks"
-        return list(self._paged(endpoint, params={"limit": limit}))
+        endpoint = f"/playlists/{playlist_id}/items"
+        return list(self._paged(endpoint, params={"limit": limit, "additional_types": "track"}))
 
     def start_playlist_track_on_device(
         self,
