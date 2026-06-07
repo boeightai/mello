@@ -1741,7 +1741,6 @@ class Mello:
         """Handle touch/mouse down."""
         if self._handle_global_control_down(pos):
             return
-        self._user_activated_playback = True
         # Menu intercept — track touch start for scroll vs tap detection
         if self.setup_menu.is_open:
             self._menu_touch_start = pos
@@ -1772,6 +1771,7 @@ class Mello:
         
         # Carousel swipes - within carousel X zone, full Y range
         if carousel_x_min <= x <= carousel_x_max:
+            self._user_activated_playback = True
             logger.debug('Touch down: carousel swipe start')
             self.touch.on_down(pos)
             self.user_interacting = True

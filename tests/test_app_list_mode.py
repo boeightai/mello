@@ -122,6 +122,7 @@ def test_playlist_row_tap_enters_track_list_without_carousel_fallthrough():
 
     assert app.ui_mode == 'tracks'
     assert app._selected_playlist_id == 'p1'
+    assert app._user_activated_playback is False
     app.touch.on_down.assert_not_called()
     app._handle_button_tap.assert_not_called()
     app.renderer.invalidate.assert_called()
@@ -137,6 +138,7 @@ def test_track_row_tap_plays_track_with_local_fallback():
 
     app.volume.unmute.assert_called_once()
     app.playback.play_state.start_loading.assert_called_once()
+    assert app._user_activated_playback is True
     app.api.play.assert_called_once_with('spotify:playlist:p1', skip_to_uri='spotify:track:t1')
     app.touch.on_down.assert_not_called()
     app._handle_button_tap.assert_not_called()
