@@ -17,7 +17,13 @@ if not hasattr(pygame, 'init') or type(pygame.font).__name__ == 'MissingModule':
 from mello.config import COLORS, SCREEN_HEIGHT, SCREEN_WIDTH
 from mello.models import CatalogItem, NowPlaying
 from mello.ui.renderer import Renderer
-from mello.ui.renderer import GLOBAL_RAIL_BUTTON, GLOBAL_RAIL_CENTER_Y, GLOBAL_RAIL_PLAY_W, GLOBAL_RAIL_W
+from mello.ui.renderer import (
+    GLOBAL_RAIL_BUTTON,
+    GLOBAL_RAIL_CENTER_Y,
+    GLOBAL_RAIL_PADDING,
+    GLOBAL_RAIL_PLAY_W,
+    GLOBAL_RAIL_W,
+)
 
 
 class DummyImageCache:
@@ -49,6 +55,7 @@ def test_playlist_list_handles_long_names_and_populates_hit_rects():
     assert rect is not None
     assert max(rect.width, rect.height) >= 1000
     assert min(rect.width, rect.height) >= 80
+    assert rect.left >= GLOBAL_RAIL_W + GLOBAL_RAIL_PADDING
     assert 0 <= rect.left < SCREEN_WIDTH
     assert 0 < rect.right <= SCREEN_WIDTH
 
@@ -118,3 +125,12 @@ def test_global_transport_hit_rects_stay_fixed_for_safety():
     assert rects['global_stop_play'].size == (GLOBAL_RAIL_BUTTON, GLOBAL_RAIL_PLAY_W)
     assert rects['global_volume_down'].size == (GLOBAL_RAIL_BUTTON, GLOBAL_RAIL_BUTTON)
     assert rects['global_volume_up'].size == (GLOBAL_RAIL_BUTTON, GLOBAL_RAIL_BUTTON)
+
+
+def test_visible_list_rows_reserve_global_rail_gutter():
+    renderer = _renderer()
+
+    rows = renderer._visible_list_rows(20)
+
+    assert rows
+    assert all(rect.left >= GLOBAL_RAIL_W + GLOBAL_RAIL_PADDING for _, rect in rows)

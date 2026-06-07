@@ -27,7 +27,7 @@ from ..config import (
 _HEADPHONE_BTN_Y = CAROUSEL_CENTER_Y - (COVER_SIZE + COVER_SPACING) - COVER_SIZE_SMALL // 2 + BTN_SIZE // 2
 
 GLOBAL_RAIL_W = 170
-GLOBAL_RAIL_PADDING = 12
+GLOBAL_RAIL_PADDING = 42
 GLOBAL_RAIL_BUTTON = 92
 GLOBAL_RAIL_PLAY_W = 170
 GLOBAL_RAIL_CENTER_Y = SCREEN_HEIGHT // 2
@@ -925,7 +925,8 @@ class Renderer:
         for i in range(count):
             x = self._LIST_ROW_X - i * row_step + scroll_offset
             rect = pygame.Rect(x, self._LIST_ROW_Y, self._LIST_ROW_H, self._LIST_ROW_W)
-            if rect.right < GLOBAL_RAIL_W + GLOBAL_RAIL_PADDING or rect.left > self._LIST_ROW_X + self._LIST_ROW_H:
+            safe_edge = GLOBAL_RAIL_W + GLOBAL_RAIL_PADDING
+            if rect.left < safe_edge or rect.left > self._LIST_ROW_X + self._LIST_ROW_H:
                 continue
             rects.append((i, rect))
         return rects
