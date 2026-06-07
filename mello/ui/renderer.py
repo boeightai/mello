@@ -243,30 +243,17 @@ class Renderer:
             return []
     
     def _draw_background(self):
-        """Draw pre-rendered full-color background (portrait mode)."""
+        """Draw a controlled full-screen background (portrait mode)."""
         if not self._bg_cache:
             self._bg_cache = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
             for x in range(SCREEN_WIDTH):
                 t = x / max(1, SCREEN_WIDTH - 1)
-                color = self._blend_color(COLORS['bg_primary'], (24, 35, 54), t)
+                color = self._blend_color(COLORS['bg_primary'], COLORS['bg_secondary'], t * 0.72)
                 pygame.draw.line(self._bg_cache, color, (x, 0), (x, SCREEN_HEIGHT))
-
-            # Broad landscape color bands. In the user's hand these read as
-            # warm top light, cool center, and grounded lower edge.
-            bands = (
-                (SCREEN_WIDTH - 96, COLORS['accent_warm'], 70),
-                (SCREEN_WIDTH - 170, COLORS['accent_family'], 34),
-                (GLOBAL_RAIL_W + 72, COLORS['accent_cool'], 42),
-                (GLOBAL_RAIL_W + 18, COLORS['accent'], 26),
-            )
-            for x, color, alpha in bands:
-                band = pygame.Surface((52, SCREEN_HEIGHT), pygame.SRCALPHA)
-                band.fill((*color, alpha))
-                self._bg_cache.blit(band, (x, 0), special_flags=pygame.BLEND_RGBA_ADD)
 
             pygame.draw.line(
                 self._bg_cache,
-                self._blend_color(COLORS['accent'], COLORS['text_primary'], 0.18),
+                self._blend_color(COLORS['accent'], COLORS['bg_secondary'], 0.55),
                 (GLOBAL_RAIL_W + 14, 0),
                 (GLOBAL_RAIL_W + 14, SCREEN_HEIGHT),
                 2,
@@ -285,10 +272,6 @@ class Renderer:
             int(a[2] + (b[2] - a[2]) * amount),
         )
 
-    @staticmethod
-    def _with_alpha(color: tuple, alpha: int) -> tuple:
-        return (*color[:3], max(0, min(255, alpha)))
-    
     def _render_text_rotated(self, text: str, font: pygame.font.Font, color: tuple) -> pygame.Surface:
         """Render text rotated 90° CW for portrait display mode."""
         text_surface = font.render(text, True, color)
@@ -523,10 +506,6 @@ class Renderer:
         
         center_cover_rect = None
         center_item = None
-        nearest_index = int(round(scroll_x))
-        if 0 <= nearest_index < len(items):
-            self._draw_carousel_art_field(items[nearest_index])
-        
         # Draw covers
         for i in range(start_i, end_i):
             item = items[i]
@@ -562,7 +541,7 @@ class Renderer:
                 self.screen.blit(shadow, (draw_x - 8, draw_y + 10))
                 pygame.draw.rect(
                     self.screen,
-                    self._blend_color(COLORS['accent_warm'], COLORS['text_primary'], 0.2),
+                    self._blend_color(COLORS['bg_elevated'], COLORS['accent'], 0.28),
                     (draw_x - 7, draw_y - 7, size + 14, size + 14),
                     border_radius=26,
                 )
@@ -570,7 +549,7 @@ class Renderer:
             if is_center:
                 pygame.draw.rect(
                     self.screen,
-                    self._with_alpha(COLORS['text_primary'], 210),
+                    self._blend_color(COLORS['text_primary'], COLORS['accent'], 0.08),
                     (draw_x, draw_y, size, size),
                     width=3,
                     border_radius=18,
@@ -586,30 +565,6 @@ class Renderer:
                 self._draw_add_button(center_cover_rect)
             elif delete_mode_id == center_item.id:
                 self._draw_delete_button(center_cover_rect)
-
-    def _draw_carousel_art_field(self, item: CatalogItem):
-        """Use current artwork as a soft full-screen color field."""
-        if not item.image:
-            return
-        try:
-            cover = self.image_cache.get(item.image, COVER_SIZE)
-            field = pygame.transform.smoothscale(cover, (520, 520)).convert_alpha()
-            field.set_alpha(54)
-            self.screen.blit(
-                field,
-                (CAROUSEL_X - 58, CAROUSEL_CENTER_Y - 260),
-                special_flags=pygame.BLEND_RGBA_ADD,
-            )
-            warm = pygame.Surface((COVER_SIZE + 70, COVER_SIZE + 70), pygame.SRCALPHA)
-            pygame.draw.rect(
-                warm,
-                (*COLORS['accent_family'], 24),
-                warm.get_rect(),
-                border_radius=42,
-            )
-            self.screen.blit(warm, (CAROUSEL_X - 35, CAROUSEL_CENTER_Y - COVER_SIZE // 2 - 35))
-        except Exception:
-            logger.debug('Could not draw carousel art field', exc_info=True)
     
     def _draw_cover_progress(self, cover_rect: tuple, item: CatalogItem, now_playing: NowPlaying):
         """Draw progress bar at the edge of the cover (portrait mode - left edge = user's bottom)."""
