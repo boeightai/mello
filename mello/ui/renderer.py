@@ -243,24 +243,51 @@ class Renderer:
             return []
     
     def _draw_background(self):
-        """Draw pre-rendered background with gradient (portrait mode)."""
+        """Draw pre-rendered full-color background (portrait mode)."""
         if not self._bg_cache:
             self._bg_cache = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-            self._bg_cache.fill(COLORS['bg_primary'])
-            # Portrait mode: gradient from right edge (user's top) along X axis
-            # X=720 is user's top, so gradient fades from X=720 towards X=570
-            for offset in range(150):
-                x = SCREEN_WIDTH - 1 - offset  # Start at right edge (user's top)
-                alpha = int(30 * (1 - offset / 150))
-                color = (
-                    min(255, COLORS['bg_primary'][0] + int(alpha * 0.75)),
-                    min(255, COLORS['bg_primary'][1] + int(alpha * 0.4)),
-                    min(255, COLORS['bg_primary'][2] + alpha),
-                )
+            for x in range(SCREEN_WIDTH):
+                t = x / max(1, SCREEN_WIDTH - 1)
+                color = self._blend_color(COLORS['bg_primary'], (24, 35, 54), t)
                 pygame.draw.line(self._bg_cache, color, (x, 0), (x, SCREEN_HEIGHT))
+
+            # Broad landscape color bands. In the user's hand these read as
+            # warm top light, cool center, and grounded lower edge.
+            bands = (
+                (SCREEN_WIDTH - 96, COLORS['accent_warm'], 70),
+                (SCREEN_WIDTH - 170, COLORS['accent_family'], 34),
+                (GLOBAL_RAIL_W + 72, COLORS['accent_cool'], 42),
+                (GLOBAL_RAIL_W + 18, COLORS['accent'], 26),
+            )
+            for x, color, alpha in bands:
+                band = pygame.Surface((52, SCREEN_HEIGHT), pygame.SRCALPHA)
+                band.fill((*color, alpha))
+                self._bg_cache.blit(band, (x, 0), special_flags=pygame.BLEND_RGBA_ADD)
+
+            pygame.draw.line(
+                self._bg_cache,
+                self._blend_color(COLORS['accent'], COLORS['text_primary'], 0.18),
+                (GLOBAL_RAIL_W + 14, 0),
+                (GLOBAL_RAIL_W + 14, SCREEN_HEIGHT),
+                2,
+            )
             self._bg_cache = self._bg_cache.convert()
         
         self.screen.blit(self._bg_cache, (0, 0))
+
+    @staticmethod
+    def _blend_color(a: tuple, b: tuple, amount: float) -> tuple:
+        """Blend two RGB colors."""
+        amount = max(0.0, min(1.0, amount))
+        return (
+            int(a[0] + (b[0] - a[0]) * amount),
+            int(a[1] + (b[1] - a[1]) * amount),
+            int(a[2] + (b[2] - a[2]) * amount),
+        )
+
+    @staticmethod
+    def _with_alpha(color: tuple, alpha: int) -> tuple:
+        return (*color[:3], max(0, min(255, alpha)))
     
     def _render_text_rotated(self, text: str, font: pygame.font.Font, color: tuple) -> pygame.Surface:
         """Render text rotated 90° CW for portrait display mode."""
@@ -304,11 +331,21 @@ class Renderer:
             return
 
         rail = pygame.Surface((GLOBAL_RAIL_W, SCREEN_HEIGHT), pygame.SRCALPHA)
-        rail.fill((8, 8, 8, 244))
+        rail.fill((*COLORS['rail'], 248))
+        pygame.draw.rect(
+            rail,
+            (*COLORS['accent_cool'], 22),
+            (0, 0, GLOBAL_RAIL_W, SCREEN_HEIGHT // 2),
+        )
+        pygame.draw.rect(
+            rail,
+            (*COLORS['accent_warm'], 18),
+            (0, SCREEN_HEIGHT // 2, GLOBAL_RAIL_W, SCREEN_HEIGHT // 2),
+        )
         self.screen.blit(rail, (0, 0))
         pygame.draw.line(
             self.screen,
-            (72, 72, 72),
+            COLORS['rail_edge'],
             (GLOBAL_RAIL_W - 1, 0),
             (GLOBAL_RAIL_W - 1, SCREEN_HEIGHT),
             2,
@@ -321,13 +358,13 @@ class Renderer:
 
         playing = ctx.is_playing and not ctx.hard_stopped
         label = 'STOP' if playing else 'PLAY'
-        main_color = COLORS['error'] if playing else COLORS['accent']
+        main_color = COLORS['stop'] if playing else COLORS['accent']
         pressed = ctx.global_pressed_button
 
         self._draw_global_button(
             self.global_volume_down_rect,
             'VOL -',
-            COLORS['bg_elevated'],
+            COLORS['surface'],
             pressed == 'global_volume_down',
         )
         self._draw_global_button(
@@ -340,7 +377,7 @@ class Renderer:
         self._draw_global_button(
             self.global_volume_up_rect,
             'VOL +',
-            COLORS['bg_elevated'],
+            COLORS['surface'],
             pressed == 'global_volume_up',
         )
 
@@ -354,8 +391,12 @@ class Renderer:
     ):
         """Draw one large family-safe global rail button."""
         color = self._lighten_color(bg_color) if pressed else bg_color
+        shadow = pygame.Surface((rect.width + 10, rect.height + 10), pygame.SRCALPHA)
+        pygame.draw.rect(shadow, (0, 0, 0, 70), shadow.get_rect(), border_radius=16)
+        self.screen.blit(shadow, (rect.x - 2, rect.y + 5))
         pygame.draw.rect(self.screen, color, rect, border_radius=14)
-        pygame.draw.rect(self.screen, (255, 255, 255), rect, width=2, border_radius=14)
+        edge = self._blend_color(color, COLORS['text_primary'], 0.45)
+        pygame.draw.rect(self.screen, edge, rect, width=2, border_radius=14)
         text = self._render_text_rotated(label, font or self.font_medium, COLORS['text_primary'])
         self.screen.blit(text, text.get_rect(center=rect.center))
     
@@ -363,6 +404,10 @@ class Renderer:
         """Draw idle screen when catalog is empty (portrait mode)."""
         center_x = SCREEN_WIDTH // 2
         center_y = SCREEN_HEIGHT // 2
+        panel = pygame.Surface((260, 720), pygame.SRCALPHA)
+        pygame.draw.rect(panel, (*COLORS['surface'], 155), panel.get_rect(), border_radius=28)
+        pygame.draw.rect(panel, (*COLORS['accent'], 70), (0, 0, 12, 720), border_radius=12)
+        self.screen.blit(panel, (center_x - 40, center_y - 360))
 
         # Logo (scaled to ~160px wide, rotated to match landscape orientation)
         logo = self.icons.get('logo')
@@ -478,6 +523,9 @@ class Renderer:
         
         center_cover_rect = None
         center_item = None
+        nearest_index = int(round(scroll_x))
+        if 0 <= nearest_index < len(items):
+            self._draw_carousel_art_field(items[nearest_index])
         
         # Draw covers
         for i in range(start_i, end_i):
@@ -508,7 +556,25 @@ class Renderer:
             else:
                 cover = self.image_cache.get_dimmed(item.image, size)
             
+            if is_center:
+                shadow = pygame.Surface((size + 24, size + 24), pygame.SRCALPHA)
+                pygame.draw.rect(shadow, (0, 0, 0, 105), shadow.get_rect(), border_radius=34)
+                self.screen.blit(shadow, (draw_x - 8, draw_y + 10))
+                pygame.draw.rect(
+                    self.screen,
+                    self._blend_color(COLORS['accent_warm'], COLORS['text_primary'], 0.2),
+                    (draw_x - 7, draw_y - 7, size + 14, size + 14),
+                    border_radius=26,
+                )
             self.screen.blit(cover, (draw_x, draw_y))
+            if is_center:
+                pygame.draw.rect(
+                    self.screen,
+                    self._with_alpha(COLORS['text_primary'], 210),
+                    (draw_x, draw_y, size, size),
+                    width=3,
+                    border_radius=18,
+                )
         
         if center_cover_rect and center_item:
             self._draw_cover_progress(center_cover_rect, center_item, now_playing)
@@ -520,6 +586,30 @@ class Renderer:
                 self._draw_add_button(center_cover_rect)
             elif delete_mode_id == center_item.id:
                 self._draw_delete_button(center_cover_rect)
+
+    def _draw_carousel_art_field(self, item: CatalogItem):
+        """Use current artwork as a soft full-screen color field."""
+        if not item.image:
+            return
+        try:
+            cover = self.image_cache.get(item.image, COVER_SIZE)
+            field = pygame.transform.smoothscale(cover, (520, 520)).convert_alpha()
+            field.set_alpha(54)
+            self.screen.blit(
+                field,
+                (CAROUSEL_X - 58, CAROUSEL_CENTER_Y - 260),
+                special_flags=pygame.BLEND_RGBA_ADD,
+            )
+            warm = pygame.Surface((COVER_SIZE + 70, COVER_SIZE + 70), pygame.SRCALPHA)
+            pygame.draw.rect(
+                warm,
+                (*COLORS['accent_family'], 24),
+                warm.get_rect(),
+                border_radius=42,
+            )
+            self.screen.blit(warm, (CAROUSEL_X - 35, CAROUSEL_CENTER_Y - COVER_SIZE // 2 - 35))
+        except Exception:
+            logger.debug('Could not draw carousel art field', exc_info=True)
     
     def _draw_cover_progress(self, cover_rect: tuple, item: CatalogItem, now_playing: NowPlaying):
         """Draw progress bar at the edge of the cover (portrait mode - left edge = user's bottom)."""
@@ -579,7 +669,7 @@ class Renderer:
         center_y = CAROUSEL_CENTER_Y
         btn_spacing = BTN_SPACING
 
-        gray_color = COLORS['bg_elevated']
+        gray_color = COLORS['surface']
         play_color = COLORS['accent']
 
         # Headphone button — only when BT is connected, opposite corner from volume
@@ -798,7 +888,7 @@ class Renderer:
 
     def _draw_list_nav_button(self, icon_name: str, center: tuple, pressed: bool = False) -> pygame.Rect:
         nav_r = self._LIST_NAV_SIZE // 2
-        nav_color = self._lighten_color(COLORS['bg_elevated']) if pressed else COLORS['bg_elevated']
+        nav_color = self._lighten_color(COLORS['surface']) if pressed else COLORS['surface']
         draw_aa_circle(self.screen, nav_color, center, nav_r)
         icon = self.icons.get(icon_name)
         if icon:
@@ -821,17 +911,44 @@ class Renderer:
         )
         if image:
             cover = self.image_cache.get(image, self._LIST_THUMB_SIZE)
+            halo = pygame.Surface((self._LIST_THUMB_SIZE + 10, self._LIST_THUMB_SIZE + 10), pygame.SRCALPHA)
+            pygame.draw.rect(halo, (*COLORS['accent_warm'], 40), halo.get_rect(), border_radius=13)
+            self.screen.blit(halo, (thumb_rect.x - 5, thumb_rect.y - 5))
             self.screen.blit(cover, thumb_rect)
         else:
             pygame.draw.rect(self.screen, COLORS['bg_secondary'], thumb_rect, border_radius=10)
+            pygame.draw.rect(self.screen, COLORS['accent_family'], thumb_rect.inflate(-18, -18), border_radius=8)
 
     def _draw_list_row(self, rect: pygame.Rect, title: str, subtitle: str = '',
                        image: Optional[str] = None, highlighted: bool = False,
                        pressed: bool = False):
-        bg_color = COLORS['accent'] if highlighted else COLORS['bg_elevated']
+        is_liked_songs = title.strip().lower() == 'liked songs'
+        bg_color = COLORS['accent'] if highlighted else (
+            self._blend_color(COLORS['surface_warm'], COLORS['accent_family'], 0.24)
+            if is_liked_songs else COLORS['surface']
+        )
         if pressed:
             bg_color = self._lighten_color(bg_color)
+        shadow = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+        pygame.draw.rect(shadow, (0, 0, 0, 70), shadow.get_rect(), border_radius=self._LIST_ROW_RADIUS)
+        self.screen.blit(shadow, (rect.x - 3, rect.y + 5))
         pygame.draw.rect(self.screen, bg_color, rect, border_radius=self._LIST_ROW_RADIUS)
+        stripe_color = COLORS['accent_warm'] if is_liked_songs else COLORS['accent_cool']
+        if highlighted:
+            stripe_color = COLORS['accent_warm']
+        pygame.draw.rect(
+            self.screen,
+            stripe_color,
+            (rect.x, rect.y, rect.width, 8),
+            border_radius=self._LIST_ROW_RADIUS,
+        )
+        pygame.draw.rect(
+            self.screen,
+            self._blend_color(bg_color, COLORS['text_primary'], 0.18),
+            rect,
+            width=1,
+            border_radius=self._LIST_ROW_RADIUS,
+        )
 
         self._draw_list_thumbnail(rect, image)
 

@@ -66,18 +66,26 @@ SPOTIFY_CLIENT_ID = os.environ.get('SPOTIFY_CLIENT_ID')
 SPOTIFY_REDIRECT_URI = os.environ.get('SPOTIFY_REDIRECT_URI', 'http://127.0.0.1:8765/callback')
 
 # ============================================
-# COLORS (Design specs from web version)
+# COLORS
 # ============================================
 
 COLORS = {
-    'bg_primary': (13, 13, 13),
-    'bg_secondary': (26, 26, 26),
-    'bg_elevated': (40, 40, 40),
-    'accent': (189, 101, 252),  # Purple #BD65FC
+    'bg_primary': (10, 14, 24),
+    'bg_secondary': (22, 31, 44),
+    'bg_elevated': (38, 47, 61),
+    'surface': (30, 40, 55),
+    'surface_warm': (55, 43, 47),
+    'accent': (28, 199, 174),
+    'accent_warm': (255, 183, 77),
+    'accent_family': (255, 105, 135),
+    'accent_cool': (74, 145, 255),
     'text_primary': (255, 255, 255),
-    'text_secondary': (160, 160, 160),
-    'text_muted': (96, 96, 96),
-    'error': (232, 80, 80),
+    'text_secondary': (214, 223, 232),
+    'text_muted': (135, 148, 164),
+    'rail': (13, 18, 29),
+    'rail_edge': (94, 110, 126),
+    'stop': (255, 61, 82),
+    'error': (255, 81, 93),
 }
 
 # ============================================
