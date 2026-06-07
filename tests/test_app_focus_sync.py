@@ -36,7 +36,7 @@ def _make_mello(items: list[CatalogItem], now_playing: NowPlaying) -> Mello:
     app.carousel = SimpleNamespace(set_target=MagicMock(), settled=True)
     app.touch = SimpleNamespace(dragging=False)
     app.user_interacting = False
-    app.play_timer = SimpleNamespace(item=None)
+    app.play_timer = SimpleNamespace(item=None, cancel=MagicMock())
     app.playback = SimpleNamespace(
         last_context_uri=None,
         has_pending_play=False,
@@ -60,6 +60,8 @@ def _make_mello(items: list[CatalogItem], now_playing: NowPlaying) -> Mello:
     app._user_driving_since = 0.0
     app._manual_pause_lock = False
     app._manual_pause_context_uri = None
+    app._hard_stopped = False
+    app._hard_stop_since = 0.0
     app._user_activated_playback = True
     app._context_switch_stall_since = 0.0
     app._last_context_watchdog_log = 0.0
@@ -258,9 +260,14 @@ class TestContextSwitchWatchdog:
             app._check_context_switch_watchdog(focused)
 
         app.playback.stop_all.assert_called_once()
+        app.play_timer.cancel.assert_called_once()
         app.api.pause.assert_called_once()
         app.volume.mute.assert_called_once()
         app._show_toast.assert_called_once_with('Loading cancelled, try again')
+        assert app._hard_stopped is True
+        assert app._manual_pause_lock is True
+        assert app._manual_pause_context_uri == 'spotify:album:b'
+        assert app._user_activated_playback is False
         assert app._pending_focus_uri is None
         assert app._requested_focus_epoch is None
         assert app._requested_focus_uri is None

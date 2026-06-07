@@ -933,7 +933,16 @@ class Mello:
             f'requested_uri={(self._requested_focus_uri or "none")[:40]} | '
             f'requested_epoch={self._requested_focus_epoch} | focus_epoch={self._focus_epoch}'
         )
-        self.playback.stop_all()
+        self._hard_stopped = True
+        self._hard_stop_since = time.time()
+        self._set_manual_pause_lock('context_switch_watchdog')
+        self._user_activated_playback = False
+        if hasattr(self.play_timer, 'cancel'):
+            self.play_timer.cancel()
+        if hasattr(self.playback, 'absolute_stop'):
+            self.playback.absolute_stop('context_switch_watchdog')
+        else:
+            self.playback.stop_all()
         self.playback.last_context_uri = None
         self._reset_pending_focus('watchdog_trip')
         self._pending_external_focus_uri = None
