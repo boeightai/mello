@@ -853,6 +853,124 @@ class Renderer:
         title_surf = self._render_text_rotated(display, self.font_large, COLORS['text_primary'])
         self.screen.blit(title_surf, title_surf.get_rect(center=(self._LIST_TITLE_X, CAROUSEL_CENTER_Y)))
 
+    def _list_user_surface(self) -> pygame.Surface:
+        """Draw list-mode in the user's landscape orientation, then rotate once."""
+        surf = pygame.Surface((SCREEN_HEIGHT, SCREEN_WIDTH))
+        surf.fill(COLORS['bg_primary'])
+        for y in range(SCREEN_WIDTH):
+            t = y / max(1, SCREEN_WIDTH - 1)
+            color = self._blend_color(COLORS['bg_primary'], COLORS['bg_secondary'], t * 0.42)
+            pygame.draw.line(surf, color, (0, y), (SCREEN_HEIGHT, y))
+
+        rail_top = SCREEN_WIDTH - GLOBAL_RAIL_W
+        pygame.draw.rect(
+            surf,
+            self._blend_color(COLORS['bg_primary'], COLORS['accent'], 0.06),
+            (0, rail_top, SCREEN_HEIGHT, GLOBAL_RAIL_W),
+        )
+        pygame.draw.line(
+            surf,
+            self._blend_color(COLORS['accent'], COLORS['bg_secondary'], 0.45),
+            (0, rail_top),
+            (SCREEN_HEIGHT, rail_top),
+            2,
+        )
+        return surf
+
+    def _physical_to_user_rect(self, rect: pygame.Rect) -> pygame.Rect:
+        """Map a physical portrait rect to the user's landscape view."""
+        return pygame.Rect(rect.y, SCREEN_WIDTH - rect.right, rect.height, rect.width)
+
+    def _finish_user_surface(self, surf: pygame.Surface):
+        self.screen.blit(pygame.transform.rotate(surf, -90), (0, 0))
+
+    def _draw_user_text(
+        self,
+        surf: pygame.Surface,
+        text: str,
+        font: pygame.font.Font,
+        color: tuple,
+        pos: tuple,
+        max_width: int,
+        *,
+        center: bool = False,
+    ):
+        display = self._truncate_text(text, font, max_width)
+        rendered = font.render(display, True, color)
+        rect = rendered.get_rect(center=pos) if center else rendered.get_rect(midleft=pos)
+        surf.blit(rendered, rect)
+
+    def _draw_user_list_header(self, surf: pygame.Surface, title: str, show_back: bool = False):
+        self._draw_user_text(
+            surf,
+            title,
+            self.font_large,
+            COLORS['text_primary'],
+            (SCREEN_HEIGHT // 2, 43),
+            SCREEN_HEIGHT - 220,
+            center=True,
+        )
+        if show_back:
+            center = (52, 52)
+            pygame.draw.circle(surf, COLORS['surface'], center, 34)
+            icon = self.icons.get('back')
+            if icon:
+                scaled = pygame.transform.smoothscale(icon, (34, 34))
+                scaled = pygame.transform.rotate(scaled, 90)
+                surf.blit(scaled, scaled.get_rect(center=center))
+
+    def _draw_user_art(self, surf: pygame.Surface, rect: pygame.Rect, image: Optional[str], is_liked_songs: bool):
+        art = pygame.Rect(rect.x + 24, rect.y + 13, 54, 54)
+        if image:
+            cover = self.image_cache.get(image, art.width)
+            surf.blit(cover, art)
+            pygame.draw.rect(surf, self._blend_color(COLORS['text_primary'], COLORS['bg_primary'], 0.78), art, width=1, border_radius=6)
+            return
+
+        if is_liked_songs:
+            pygame.draw.rect(surf, self._blend_color(COLORS['accent_family'], COLORS['accent_warm'], 0.22), art, border_radius=6)
+            pygame.draw.circle(surf, self._blend_color(COLORS['text_primary'], COLORS['accent_family'], 0.08), art.center, 14)
+            pygame.draw.circle(surf, self._blend_color(COLORS['accent_family'], COLORS['bg_primary'], 0.3), art.center, 6)
+            return
+
+        pygame.draw.rect(surf, self._blend_color(COLORS['surface'], COLORS['bg_primary'], 0.18), art, border_radius=6)
+        pygame.draw.circle(surf, self._blend_color(COLORS['accent'], COLORS['bg_secondary'], 0.45), art.center, 18)
+        pygame.draw.circle(surf, self._blend_color(COLORS['bg_primary'], COLORS['accent'], 0.24), art.center, 7)
+
+    def _draw_user_list_row(
+        self,
+        surf: pygame.Surface,
+        rect: pygame.Rect,
+        title: str,
+        subtitle: str = '',
+        image: Optional[str] = None,
+        highlighted: bool = False,
+        pressed: bool = False,
+    ):
+        is_liked_songs = title.strip().lower() == 'liked songs'
+        bg = self._blend_color(COLORS['surface'], COLORS['accent'], 0.12) if highlighted else (
+            self._blend_color(COLORS['surface_warm'], COLORS['bg_secondary'], 0.18)
+            if is_liked_songs else COLORS['surface']
+        )
+        if pressed:
+            bg = self._lighten_color(bg, 0.14)
+        pygame.draw.rect(surf, (0, 0, 0), rect.move(0, 3), border_radius=8)
+        pygame.draw.rect(surf, bg, rect, border_radius=8)
+        pygame.draw.rect(surf, self._blend_color(bg, COLORS['text_primary'], 0.14), rect, width=1, border_radius=8)
+        if is_liked_songs:
+            pygame.draw.rect(surf, COLORS['accent_family'], (rect.x, rect.y, 6, rect.height), border_radius=6)
+        if highlighted:
+            pygame.draw.rect(surf, COLORS['accent'], (rect.right - 9, rect.y, 9, rect.height), border_radius=6)
+
+        self._draw_user_art(surf, rect, image, is_liked_songs)
+
+        text_x = rect.x + 102
+        max_text = rect.width - 138
+        title_color = COLORS['accent'] if highlighted else COLORS['text_primary']
+        self._draw_user_text(surf, title, self.font_medium, title_color, (text_x, rect.y + 29), max_text)
+        if subtitle:
+            self._draw_user_text(surf, subtitle, self.font_small, COLORS['text_secondary'], (text_x, rect.y + 56), max_text)
+
     def _draw_list_nav_button(self, icon_name: str, center: tuple, pressed: bool = False) -> pygame.Rect:
         nav_r = self._LIST_NAV_SIZE // 2
         nav_color = self._lighten_color(COLORS['surface']) if pressed else COLORS['surface']
@@ -1034,15 +1152,15 @@ class Renderer:
                            title: str = 'Playlists', show_back: bool = False,
                            show_settings: bool = False) -> None:
         """Draw playlist selection list and populate playlist hit rectangles."""
-        self._draw_background()
+        surf = self._list_user_surface()
         self._clear_list_hit_rects()
         self.add_button_rect = None
         self.delete_button_rect = None
         self.settings_button_rect = None
 
-        self._draw_list_title(title)
+        self._draw_user_list_header(surf, title, show_back=show_back)
         if show_back:
-            self.playlist_back_rect = self._draw_list_nav_button('back', self._LIST_NAV_CENTER)
+            self.playlist_back_rect = pygame.Rect(636, 18, 68, 68)
         if show_settings and self.icons.get('settings'):
             self.playlist_settings_rect = self._draw_list_nav_button(
                 'settings',
@@ -1051,7 +1169,8 @@ class Renderer:
             )
 
         if not playlists:
-            self._draw_list_empty_state('No playlists')
+            self._draw_user_text(surf, 'No playlists', self.font_medium, COLORS['text_secondary'], (SCREEN_HEIGHT // 2, 260), 520, center=True)
+            self._finish_user_surface(surf)
             return None
 
         self.playlist_row_rects = [None] * len(playlists)
@@ -1059,14 +1178,16 @@ class Renderer:
         for index, rect in self._visible_list_rows(len(playlists), scroll_offset):
             self.playlist_row_rects[index] = rect
             playlist = playlists[index]
-            self._draw_list_row(
-                rect,
+            self._draw_user_list_row(
+                surf,
+                self._physical_to_user_rect(rect),
                 playlist.name,
                 playlist.artist or '',
                 playlist.image,
                 highlighted=bool(current_uri and playlist.uri == current_uri),
                 pressed=index == pressed_index,
             )
+        self._finish_user_surface(surf)
         return None
 
     def draw_track_list(self, playlist: Optional[CatalogItem], tracks: List[dict],
@@ -1074,18 +1195,19 @@ class Renderer:
                         scroll_offset: int = 0, pressed_index: Optional[int] = None,
                         title: Optional[str] = None) -> None:
         """Draw tracks for a playlist and populate track hit rectangles."""
-        self._draw_background()
+        surf = self._list_user_surface()
         self._clear_list_hit_rects()
         self.add_button_rect = None
         self.delete_button_rect = None
         self.settings_button_rect = None
 
         title_text = title or (playlist.name if playlist else 'Tracks')
-        self._draw_list_title(title_text)
-        self.track_back_rect = self._draw_list_nav_button('back', self._LIST_NAV_CENTER)
+        self._draw_user_list_header(surf, title_text, show_back=True)
+        self.track_back_rect = pygame.Rect(636, 18, 68, 68)
 
         if not tracks:
-            self._draw_list_empty_state('No tracks')
+            self._draw_user_text(surf, 'No tracks', self.font_medium, COLORS['text_secondary'], (SCREEN_HEIGHT // 2, 260), 520, center=True)
+            self._finish_user_surface(surf)
             return None
 
         active_uri = current_track_uri or now_playing.track_uri
@@ -1094,14 +1216,16 @@ class Renderer:
         for index, rect in self._visible_list_rows(len(tracks), scroll_offset):
             self.track_row_rects[index] = rect
             name, artist, uri, image = self._track_from_row(tracks[index])
-            self._draw_list_row(
-                rect,
+            self._draw_user_list_row(
+                surf,
+                self._physical_to_user_rect(rect),
                 name,
                 artist,
                 image,
                 highlighted=bool(active_uri and uri == active_uri),
                 pressed=index == pressed_index,
             )
+        self._finish_user_surface(surf)
         return None
     
     # ============================================
