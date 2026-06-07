@@ -133,4 +133,5 @@ def test_visible_list_rows_reserve_global_rail_gutter():
     rows = renderer._visible_list_rows(20)
 
     assert rows
+    assert len(rows) >= 5
     assert all(rect.left >= GLOBAL_RAIL_W + GLOBAL_RAIL_PADDING for _, rect in rows)
