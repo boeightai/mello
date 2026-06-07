@@ -253,12 +253,12 @@ class Renderer:
 
             pygame.draw.rect(
                 self._bg_cache,
-                self._blend_color(COLORS['bg_primary'], COLORS['accent_cool'], 0.05),
+                self._blend_color(COLORS['bg_primary'], COLORS['accent'], 0.035),
                 (GLOBAL_RAIL_W, 0, 36, SCREEN_HEIGHT),
             )
             pygame.draw.line(
                 self._bg_cache,
-                self._blend_color(COLORS['accent'], COLORS['bg_secondary'], 0.35),
+                self._blend_color(COLORS['accent'], COLORS['bg_secondary'], 0.5),
                 (GLOBAL_RAIL_W + 14, 0),
                 (GLOBAL_RAIL_W + 14, SCREEN_HEIGHT),
                 2,
@@ -322,12 +322,12 @@ class Renderer:
         rail.fill((*COLORS['rail'], 252))
         pygame.draw.rect(
             rail,
-            (*COLORS['accent_cool'], 16),
+            (*COLORS['accent'], 10),
             (0, 0, GLOBAL_RAIL_W, SCREEN_HEIGHT),
         )
         pygame.draw.rect(
             rail,
-            (*COLORS['accent_warm'], 16),
+            (*COLORS['accent'], 22),
             (GLOBAL_RAIL_W - 18, 0, 18, SCREEN_HEIGHT),
         )
         self.screen.blit(rail, (0, 0))
@@ -882,13 +882,45 @@ class Renderer:
             pygame.draw.rect(halo, (*COLORS['accent_warm'], 34), halo.get_rect(), border_radius=14)
             self.screen.blit(halo, (thumb_rect.x - 6, thumb_rect.y - 6))
             self.screen.blit(cover, thumb_rect)
+        elif is_liked_songs:
+            pygame.draw.rect(
+                self.screen,
+                self._blend_color(COLORS['accent_family'], COLORS['accent_warm'], 0.22),
+                thumb_rect,
+                border_radius=13,
+            )
+            pygame.draw.rect(
+                self.screen,
+                (*self._blend_color(COLORS['accent_family'], COLORS['bg_primary'], 0.18), 255),
+                (thumb_rect.x, thumb_rect.y, thumb_rect.width // 2, thumb_rect.height),
+                border_radius=13,
+            )
+            pygame.draw.rect(
+                self.screen,
+                self._blend_color(COLORS['text_primary'], COLORS['accent'], 0.18),
+                thumb_rect,
+                width=1,
+                border_radius=13,
+            )
+            pygame.draw.circle(
+                self.screen,
+                self._blend_color(COLORS['text_primary'], COLORS['accent_family'], 0.08),
+                thumb_rect.center,
+                self._LIST_THUMB_SIZE // 4,
+            )
+            pygame.draw.circle(
+                self.screen,
+                self._blend_color(COLORS['accent_family'], COLORS['bg_primary'], 0.28),
+                thumb_rect.center,
+                self._LIST_THUMB_SIZE // 10,
+            )
         else:
-            base = self._blend_color(COLORS['surface'], COLORS['bg_primary'], 0.38)
-            accent = COLORS['accent_family'] if is_liked_songs else COLORS['accent_cool']
+            base = self._blend_color(COLORS['surface'], COLORS['bg_primary'], 0.18)
+            accent = COLORS['accent']
             pygame.draw.rect(self.screen, base, thumb_rect, border_radius=13)
             pygame.draw.circle(
                 self.screen,
-                self._blend_color(accent, COLORS['text_primary'], 0.18),
+                self._blend_color(accent, COLORS['bg_secondary'], 0.48),
                 thumb_rect.center,
                 self._LIST_THUMB_SIZE // 3,
             )
@@ -910,8 +942,8 @@ class Renderer:
                        image: Optional[str] = None, highlighted: bool = False,
                        pressed: bool = False):
         is_liked_songs = title.strip().lower() == 'liked songs'
-        bg_color = COLORS['accent'] if highlighted else (
-            self._blend_color(COLORS['surface_warm'], COLORS['accent_family'], 0.18)
+        bg_color = self._blend_color(COLORS['surface'], COLORS['accent'], 0.14) if highlighted else (
+            self._blend_color(COLORS['surface_warm'], COLORS['bg_secondary'], 0.18)
             if is_liked_songs else COLORS['surface']
         )
         if pressed:
@@ -925,15 +957,20 @@ class Renderer:
             (*self._blend_color(bg_color, COLORS['text_primary'], 0.05), 255),
             (rect.x + rect.width - 1, rect.y + 1, 1, rect.height - 2),
         )
-        stripe_color = COLORS['accent_warm'] if is_liked_songs else COLORS['accent_cool']
+        if is_liked_songs:
+            pygame.draw.rect(
+                self.screen,
+                COLORS['accent_family'],
+                (rect.x, rect.y, rect.width, 7),
+                border_radius=self._LIST_ROW_RADIUS,
+            )
         if highlighted:
-            stripe_color = COLORS['accent_warm']
-        pygame.draw.rect(
-            self.screen,
-            stripe_color,
-            (rect.x, rect.y, rect.width, 8),
-            border_radius=self._LIST_ROW_RADIUS,
-        )
+            pygame.draw.rect(
+                self.screen,
+                COLORS['accent'],
+                (rect.x, rect.bottom - 10, rect.width, 10),
+                border_radius=self._LIST_ROW_RADIUS,
+            )
         pygame.draw.rect(
             self.screen,
             self._blend_color(bg_color, COLORS['text_primary'], 0.18),
@@ -946,7 +983,8 @@ class Renderer:
 
         max_text_width = self._list_text_max_width()
         title_display = self._truncate_text(title, self.font_medium, max_text_width)
-        title_surf = self._render_text_rotated(title_display, self.font_medium, COLORS['text_primary'])
+        title_color = COLORS['accent'] if highlighted else COLORS['text_primary']
+        title_surf = self._render_text_rotated(title_display, self.font_medium, title_color)
 
         if subtitle:
             subtitle_display = self._truncate_text(subtitle, self.font_small, max_text_width)
