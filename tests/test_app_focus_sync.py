@@ -18,9 +18,9 @@ pygame_stub.font = SimpleNamespace(Font=object)
 sys.modules.setdefault('pygame', pygame_stub)
 sys.modules.setdefault('pygame.gfxdraw', types.ModuleType('pygame.gfxdraw'))
 
-from mello.app import Mello
+from mello.app import FOCUS_DWELL_AUTOPLAY_ENABLED, Mello
 from mello.config import CONTEXT_SWITCH_WATCHDOG_TIMEOUT
-from mello.models import CatalogItem, NowPlaying
+from mello.models import CatalogItem, MenuState, NowPlaying
 
 
 def _item(item_id: str, uri: str, name: str) -> CatalogItem:
@@ -33,8 +33,8 @@ def _make_mello(items: list[CatalogItem], now_playing: NowPlaying) -> Mello:
     app.catalog_manager = SimpleNamespace(items=items)
     app.temp_item = None
     app.selected_index = 0
-    app.carousel = SimpleNamespace(set_target=MagicMock(), settled=True)
-    app.touch = SimpleNamespace(dragging=False)
+    app.carousel = SimpleNamespace(set_target=MagicMock(), update=MagicMock(), settled=True)
+    app.touch = SimpleNamespace(dragging=False, check_long_press=MagicMock(return_value=False))
     app.user_interacting = False
     app.play_timer = SimpleNamespace(item=None, cancel=MagicMock())
     app.playback = SimpleNamespace(
@@ -42,9 +42,12 @@ def _make_mello(items: list[CatalogItem], now_playing: NowPlaying) -> Mello:
         has_pending_play=False,
         pause_intent_active=False,
         play_in_progress=False,
-        play_state=SimpleNamespace(should_show_loading=False),
+        play_state=SimpleNamespace(should_show_loading=False, is_loading=False),
         stop_all=MagicMock(),
         is_item_playing=lambda item, now_playing: item.uri == now_playing.context_uri and now_playing.playing,
+        update_mock=MagicMock(),
+        save_progress=MagicMock(),
+        update_loading_state=MagicMock(),
     )
     app.api = SimpleNamespace(pause=MagicMock(), set_repeat_context=MagicMock(return_value=True))
     app.volume = SimpleNamespace(unmute=MagicMock(), mute=MagicMock())
@@ -68,9 +71,35 @@ def _make_mello(items: list[CatalogItem], now_playing: NowPlaying) -> Mello:
     app._repeat_context_uri = None
     app._repeat_context_last_attempt = 0.0
     app._status_unknown = False
+    app._startup_ready = True
+    app._last_status_ok_at = time.time()
+    app._last_focus_gate_log = 0.0
+    app._last_status_not_ready_log = 0.0
+    app._last_requested_hold_log = 0.0
+    app._autoplay_stall_since = 0.0
+    app._last_autoplay_stall_log = 0.0
+    app._cover_collect_context = None
+    app._context_change_time = 0.0
+    app._last_cover_collect_key = None
+    app._volume_hold_start = None
+    app._menu_hold_triggered = False
+    app._pressed_button = None
+    app._pressed_time = 0.0
+    app._last_title_diag_log = time.time()
     app._connected_lock = threading.Lock()
     app._connected = True
     app._show_toast = MagicMock()
+    app._check_touch_health = MagicMock()
+    app._play_item = MagicMock()
+    app._display_title_for_item = MagicMock(return_value=('none', ''))
+    app.setup_menu = SimpleNamespace(update=MagicMock(), state=MenuState.CLOSED)
+    app.sleep_manager = SimpleNamespace(
+        is_sleeping=False,
+        last_activity=time.time(),
+        check_sleep=MagicMock(),
+    )
+    app.bluetooth = SimpleNamespace(pause_monitoring=MagicMock())
+    app.tracker = SimpleNamespace(on_sleep=MagicMock())
     app._now_playing_lock = threading.Lock()
     app._now_playing = now_playing
     return app
@@ -93,6 +122,18 @@ class TestRemoteFocusSync:
         app.renderer.invalidate.assert_called_once()
         assert app._focus_epoch == 1
         assert app._pending_external_focus_uri is None
+
+    def test_focus_dwell_autoplay_is_permanently_disabled(self):
+        focused = _item('1', 'spotify:album:a', 'A')
+        app = _make_mello([focused], NowPlaying(playing=False, stopped=True))
+        app._user_activated_playback = True
+        app._pending_focus_uri = focused.uri
+        app._pending_focus_since = time.time() - 5.0
+
+        app._update(0.016)
+
+        assert FOCUS_DWELL_AUTOPLAY_ENABLED is False
+        app._play_item.assert_not_called()
 
 
 class TestRepeatContextSync:

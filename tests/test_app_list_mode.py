@@ -18,10 +18,17 @@ pygame_stub.K_ESCAPE = 27
 pygame_stub.K_BACKSPACE = 8
 pygame_stub.K_r = ord('r')
 pygame_stub.K_l = ord('l')
+pygame_stub.K_LEFT = 276
+pygame_stub.K_RIGHT = 275
+pygame_stub.K_SPACE = 32
+pygame_stub.K_RETURN = 13
 sys.modules.setdefault('pygame', pygame_stub)
 sys.modules.setdefault('pygame.gfxdraw', types.ModuleType('pygame.gfxdraw'))
+for _key_name in ('K_ESCAPE', 'K_BACKSPACE', 'K_r', 'K_l', 'K_LEFT', 'K_RIGHT', 'K_SPACE', 'K_RETURN'):
+    setattr(sys.modules['pygame'], _key_name, getattr(pygame_stub, _key_name))
 
 from mello.app import Mello
+from mello.config import CAROUSEL_X, CAROUSEL_CENTER_Y
 from mello.api.spotify_library import LIKED_SONGS_ID
 from mello.models import NowPlaying, SpotifyPlaylist, SpotifyPlaylistTrack
 
@@ -85,6 +92,9 @@ def _make_app(mode='playlists'):
         playlist_back_rect=(220, 100, 40, 40),
         playlist_settings_rect=None,
         track_back_rect=(220, 100, 40, 40),
+        add_button_rect=None,
+        delete_button_rect=None,
+        settings_button_rect=None,
         global_stop_play_rect=None,
         global_volume_down_rect=None,
         global_volume_up_rect=None,
@@ -109,6 +119,8 @@ def _make_app(mode='playlists'):
     app._show_toast = MagicMock()
     app._handle_button_tap = MagicMock()
     app._clear_manual_pause_lock = MagicMock()
+    app._navigate = MagicMock()
+    app._toggle_play = MagicMock()
     app._last_play_commit_uri = None
     app._last_play_commit_at = 0
     return app
@@ -126,6 +138,26 @@ def test_playlist_row_tap_enters_track_list_without_carousel_fallthrough():
     app.touch.on_down.assert_not_called()
     app._handle_button_tap.assert_not_called()
     app.renderer.invalidate.assert_called()
+
+
+def test_carousel_swipe_does_not_arm_background_autoplay():
+    app = _make_app('carousel')
+
+    app._handle_touch_down((CAROUSEL_X + 10, CAROUSEL_CENTER_Y))
+
+    assert app._user_activated_playback is False
+    app.touch.on_down.assert_called_once()
+    app._handle_button_tap.assert_not_called()
+
+
+def test_keyboard_navigation_does_not_arm_background_autoplay():
+    app = _make_app('carousel')
+
+    app._handle_key(pygame_stub.K_RIGHT)
+
+    assert app._user_activated_playback is False
+    app._navigate.assert_called_once_with(1)
+    app._toggle_play.assert_not_called()
 
 
 def test_track_row_tap_plays_track_with_local_fallback():

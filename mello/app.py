@@ -38,6 +38,10 @@ from .utils import run_async, get_runtime_version_label, set_system_volume
 
 logger = logging.getLogger(__name__)
 
+# Permanent safety policy: browsing/focus changes must never start audio.
+# Audio may start only from explicit transport actions such as PLAY or a track tap.
+FOCUS_DWELL_AUTOPLAY_ENABLED = False
+
 
 class Mello:
     """Main Mello application."""
@@ -1653,7 +1657,6 @@ class Mello:
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 logger.debug(f'Event: MOUSEBUTTONDOWN at {event.pos}')
                 if self.sleep_manager.is_sleeping:
-                    self._user_activated_playback = True
                     self._wake_from_sleep(f'pygame_touch:{event.pos}')
                     continue
                 self.sleep_manager.reset_timer()
@@ -1661,7 +1664,6 @@ class Mello:
             
             elif event.type == pygame.KEYDOWN:
                 if self.sleep_manager.is_sleeping:
-                    self._user_activated_playback = True
                     self._wake_from_sleep(f'pygame_key:{event.key}')
                     continue
                 self.sleep_manager.reset_timer()
@@ -1711,7 +1713,6 @@ class Mello:
     
     def _handle_key(self, key):
         """Handle keyboard input."""
-        self._user_activated_playback = True
         if self._list_mode_active():
             if key == pygame.K_ESCAPE:
                 self._exit_list_mode()
@@ -1771,7 +1772,6 @@ class Mello:
         
         # Carousel swipes - within carousel X zone, full Y range
         if carousel_x_min <= x <= carousel_x_max:
-            self._user_activated_playback = True
             logger.debug('Touch down: carousel swipe start')
             self.touch.on_down(pos)
             self.user_interacting = True
@@ -2682,7 +2682,8 @@ class Mello:
                 self._requested_focus_uri = None
                 self._requested_focus_since = 0.0
         stable_ready = (
-            self._startup_ready
+            FOCUS_DWELL_AUTOPLAY_ENABLED
+            and self._startup_ready
             and self.connected
             and (status_ready or paused_focused_context)
             and not prioritize_remote_focus
@@ -2763,6 +2764,7 @@ class Mello:
             now = time.time()
             if now - self._last_focus_gate_log > 3.0:
                 reason = (
+                    f'focus_dwell_autoplay={FOCUS_DWELL_AUTOPLAY_ENABLED}, '
                     f'startup_ready={self._startup_ready}, connected={self.connected}, '
                     f'status_ready={(time.time() - self._last_status_ok_at) < 4.0 and not self._status_unknown}, '
                     f'status_unknown={self._status_unknown}, '
@@ -2774,7 +2776,7 @@ class Mello:
                 )
                 logger.info(f'PLAY gate blocked | {reason}')
                 self._last_focus_gate_log = now
-            elif self._startup_ready and self.connected and (
+            elif FOCUS_DWELL_AUTOPLAY_ENABLED and self._startup_ready and self.connected and (
                 self._status_unknown or (now - self._last_status_ok_at) >= 4.0
             ):
                 if now - self._last_status_not_ready_log > 3.0:
@@ -2880,7 +2882,8 @@ class Mello:
         if focused_item is not None and not focused_item.is_temp:
             focused_uri = focused_item.uri
             auto_intent_ready = (
-                self._startup_ready
+                FOCUS_DWELL_AUTOPLAY_ENABLED
+                and self._startup_ready
                 and self.connected
                 and self._user_activated_playback
                 and not self._manual_pause_lock
